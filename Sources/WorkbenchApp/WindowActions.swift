@@ -107,10 +107,10 @@ extension Workbench {
     /// Compute the whole workspace before surfacing peer windows and selecting one keyboard target.
     func plannedCommands(
         for groups: [WindowGroup], peers: [WindowGroup], mode: WorkspaceSwitchMode,
-        preferred: UUID? = nil, bringForward: Bool = true, document: WorkbenchState? = nil
+        preferred: UUID? = nil, bringForward: Bool = true, document: WorkbenchState? = nil, live supplied: [UUID: LiveWindow]? = nil
     ) -> [WindowCommand] {
         let document = document ?? state
-        let live = Dictionary(uniqueKeysWithValues: windows.map { ($0.id, $0) })
+        let live = supplied ?? Dictionary(uniqueKeysWithValues: windows.map { ($0.id, $0) })
         func available(_ id: UUID) -> Bool {
             guard let w = live[id], w.kind == .normal, !w.fullscreen else { return false }
             return !w.minimized || coordinator.journal.entries[id]?.minimizedByUs == true

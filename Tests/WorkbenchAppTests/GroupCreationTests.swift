@@ -37,3 +37,22 @@ import WorkbenchCore
     #expect(backend.windows[first]?.focused == true)
     #expect(try LocalFile.read(WorkbenchState.self, from: model.configURL) == model.state)
 }
+
+@Test @MainActor func creatingAfterReleaseUsesCurrentMinimizedState() async throws {
+    let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: folder) }
+    let system = AppTestWindows(), first = system.add(), peer = system.add()
+    let model = Workbench(directory: folder, controller: system)
+    try model.change { $0.workspaces[0].groups = [WindowGroup(name: "旧组", floating: [first])] }.get()
+    model.update(Array(system.windows.values), permission: true, screens: [AppTestWindows.screen])
+    try await model.execute([.conceal(first)])
+    model.update(Array(system.windows.values), permission: true, screens: [AppTestWindows.screen])
+    model.release(first)
+    while model.busy { await Task.yield() }
+    #expect(system.windows[first]?.minimized == false)
+    #expect(model.windows.first(where: { $0.id == first })?.minimized == true)
+    let ws = try #require(model.state.activeID)
+    _ = try await model.createAndApplyGroup(name: "新组", workspace: ws, members: [first, peer], preset: .columns).get()
+    #expect(system.focusedIDs.last == first)
+    #expect(system.windows[first]?.frame.minX == AppTestWindows.screen.frame.minX)
+}

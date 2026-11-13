@@ -246,8 +246,26 @@ import WorkbenchCore
             try? await Task.sleep(for: .milliseconds(45))
             guard !Task.isCancelled, let self else { return }
             self.publishTask = nil
-            self.onChange?(self.snapshots.keys.sorted().flatMap { self.snapshots[$0] ?? [] })
+            self.emitSnapshot()
         }
+    }
+
+    /// Different process queues can finish scans that each saw their owner in front.
+    /// Only the current foreground process may contribute a focused window.
+    static func visibleSnapshot(_ snapshots: [pid_t: [LiveWindow]], frontmost: pid_t?) -> [LiveWindow] {
+        snapshots.keys.sorted().flatMap { pid in
+            let rows = snapshots[pid] ?? []
+            if pid == frontmost { return rows }
+            return rows.map { row in
+                var window = row
+                window.focused = false
+                return window
+            }
+        }
+    }
+
+    private func emitSnapshot() {
+        onChange?(Self.visibleSnapshot(snapshots, frontmost: NSWorkspace.shared.frontmostApplication?.processIdentifier))
     }
 
     private func worker(_ id: UUID) throws -> ProcessWindows {
@@ -295,7 +313,17 @@ import WorkbenchCore
         try await worker.perform { try $0.raise(id) }
         for delay in [0, 50, 100, 150] {
             if delay > 0 { try await Task.sleep(for: .milliseconds(delay)) }
-            if app.isActive, try await read(id).focused { return }
+            if app.isActive {
+                let confirmed = try await read(id)
+                guard confirmed.focused, app.isActive, self.workers[worker.info.pid] === worker else { continue }
+                if var rows = snapshots[worker.info.pid], let index = rows.firstIndex(where: { $0.id == id }) {
+                    for i in rows.indices { rows[i].focused = false }
+                    rows[index] = confirmed
+                    snapshots[worker.info.pid] = rows
+                    emitSnapshot()
+                }
+                return
+            }
         }
         throw WindowAccessError.verification
     }

@@ -38,6 +38,10 @@ public final class WindowCoordinator {
         self.persist = persist
     }
 
+    public func read(_ runtime: UUID) async throws -> LiveWindow {
+        try await controller.read(runtime)
+    }
+
     private func record(_ lease: WindowLease?, for member: UUID) throws {
         var next = journal
         next.entries[member] = lease

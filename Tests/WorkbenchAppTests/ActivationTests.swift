@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 import WorkbenchCore
+@testable import MacWindows
 @testable import WorkbenchApp
 
 private func sampleWindow() -> LiveWindow {
@@ -101,4 +102,24 @@ private func sampleWindow() -> LiveWindow {
     model.update([a, b], permission: true, screens: [])
     #expect(!model.canSafelyMinimize(a.id))
     #expect(!model.canSafelyMinimize(b.id))
+}
+
+@Test @MainActor func staleFormerAppFocusDoesNotChangeItsActiveTab() throws {
+    let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: folder) }
+    let model = Workbench(directory: folder)
+    let saved = sampleWindow()
+    var stale = sampleWindow(), front = sampleWindow()
+    stale.focused = true
+    front.focused = true
+    front.identity.pid = 2
+    var group = WindowGroup(name: "后台窗口", floating: [saved.id, stale.id])
+    group.apply(.tabs)
+    group.activate(saved.id)
+    try model.change { $0.workspaces[0].groups = [group] }.get()
+    let perProcess = [stale.identity.pid: [stale, saved], front.identity.pid: [front]]
+    // Each process was scanned while it was frontmost. Together those stale flags cannot both be correct.
+    model.update(
+        MacWindows.visibleSnapshot(perProcess, frontmost: front.identity.pid), permission: true, screens: [AppTestWindows.screen])
+    #expect(model.groupList.first?.root?.panes.first?.active == saved.id)
 }

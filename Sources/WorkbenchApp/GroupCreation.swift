@@ -27,12 +27,16 @@ extension Workbench {
             let selected = Set(members)
             let switching = state.activeID != workspace
             if switching { captureFloating(in: activeWorkspace, document: &next) }
+            var live = Dictionary(uniqueKeysWithValues: windows.map { ($0.id, $0) })
+            // A preceding release may already have revealed a member before its AX notification is delivered.
             for id in members {
-                guard let w = windows.first(where: { $0.id == id }), bindings[id] != nil else {
-                    throw WindowAccessError.unavailable
-                }
-                guard !w.fullscreen, w.kind == .normal else { throw WindowAccessError.unsupported }
-                next.identities[id] = w.identity
+                guard let runtime = bindings[id], let expected = live[id] else { throw WindowAccessError.unavailable }
+                var current = try await coordinator.read(runtime)
+                guard bindings[id] == runtime, current.identity == expected.identity else { throw WindowAccessError.unavailable }
+                guard !current.fullscreen, current.kind == .normal else { throw WindowAccessError.unsupported }
+                current.id = id
+                live[id] = current
+                next.identities[id] = current.identity
             }
             for i in next.workspaces.indices {
                 for j in next.workspaces[i].groups.indices {
@@ -51,7 +55,8 @@ extension Workbench {
 
             let peers = next.workspaces[wi].groups
             let groups = switching ? peers : [group]
-            let planned = plannedCommands(for: groups, peers: peers, mode: .arrange, preferred: members.first, document: next)
+            let planned = plannedCommands(
+                for: groups, peers: peers, mode: .arrange, preferred: members.first, document: next, live: live)
             var commands: [WindowCommand] = []
             if switching, next.prefs.switchMode == .concentrate, !planned.isEmpty {
                 commands = (activeWorkspace?.groups.flatMap(\.memberIDs) ?? []).filter {
