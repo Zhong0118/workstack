@@ -366,6 +366,43 @@ import WorkbenchCore
         try await settle()
         try await wait("resumed fixture focus") { fixtures().contains { $0.id == side && $0.focused } }
 
+        model.selectTab(tabA, group: group)
+        try await settle()
+        try await wait("outgoing tab has focus") { fixtures().contains { $0.id == tabA && $0.focused } }
+        let beforeRelease = try await actual(tabA)
+        let freeGroup = try await model.createAndApplyGroup(name: "Floating tab", workspace: ws, members: [tabA], preset: .free)
+            .get()
+        try await wait("floating transfer left a visible successor") {
+            fixtures().contains { $0.id == tabB && !$0.minimized }
+        }
+        try require(try await actual(tabA).focused && model.state.memberIDs.contains(tabB), "floating transfer focus or membership")
+        model.undo()
+        try await settle()
+        try require(!model.groupList.contains { $0.id == freeGroup }, "undo kept temporary floating group")
+        model.selectTab(tabA, group: group)
+        try await settle()
+        try await wait("original tab visible again") { fixtures().contains { $0.id == tabA && $0.focused } }
+        print("integration_step=float_active_tab passed")
+        model.release(tabA)
+        try await settle()
+        let successor = try await actual(tabB), detached = try await actual(tabA)
+        try require(
+            successor.focused && !successor.minimized && successor.frame.roughlyEquals(beforeRelease.frame),
+            "released tab did not hand its pane to the visible successor")
+        try require(
+            detached.frame.roughlyEquals(left[0].frame) && model.coordinator.journal.entries[tabA] == nil,
+            "released tab did not return to its original frame")
+        print("integration_step=release_active_tab passed")
+
+        _ = try await model.createAndApplyGroup(name: "Third group", workspace: ws, members: [tabA], preset: .tabs).get()
+        let newFrame = try await actual(tabA).frame
+        for id in [tabB, spare, side] {
+            let peer = try await actual(id)
+            let overlap = peer.frame.intersection(newFrame)
+            try require(!peer.minimized && (overlap.width <= 2 || overlap.height <= 2), "new group overlaps an applied peer")
+        }
+        print("integration_step=reflow_existing_groups passed")
+
         // An independent observer outlives model.finish(), which stops the app's backend.
         let observer = MacWindows(allowedApplications: apps)
         var observed = [LiveWindow]()

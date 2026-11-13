@@ -63,6 +63,22 @@ extension Workbench {
                     !selected.contains($0) && canSafelyMinimize($0)
                 }.map(WindowCommand.conceal)
             }
+            if !switching, let previous = activeWorkspace {
+                // Only resize previously applied tiled peers whose layout actually changed.
+                let affected = peers.compactMap { peer -> WindowGroup? in
+                    guard engagedGroups.contains(peer.id), peer.root != nil,
+                        let old = previous.groups.first(where: { $0.id == peer.id }),
+                        old.root != peer.root
+                            || area(for: old, among: previous.groups, document: state)
+                                != area(for: peer, among: peers, document: next)
+                    else { return nil }
+                    var tiled = peer
+                    tiled.floating = []
+                    return tiled
+                }
+                commands += plannedCommands(
+                    for: affected, peers: peers, mode: .arrange, bringForward: false, document: next, live: live)
+            }
             try await execute(commands + planned) { try self.commit(next).get() }
             if switching { engagedGroups.removeAll() }
             engagedGroups.formUnion(groups.map(\.id))

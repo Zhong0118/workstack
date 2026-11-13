@@ -343,10 +343,39 @@ final class Workbench: ObservableObject {
         }
     }
     func release(_ member: UUID) {
-        change { next in
-            for wi in next.workspaces.indices {
-                for gi in next.workspaces[wi].groups.indices { next.workspaces[wi].groups[gi].remove(member) }
+        guard let group = groupList.first(where: { $0.memberIDs.contains(member) }),
+            let (wi, gi) = indices(group.id, in: state)
+        else { return }
+        guard state.activeID == state.workspaces[wi].id, engagedGroups.contains(group.id),
+            let pane = group.root?.panes.first(where: { $0.active == member && $0.tabs.count > 1 }),
+            let runtime = bindings[member]
+        else {
+            change { $0.workspaces[wi].groups[gi].remove(member) }
+            return
+        }
+
+        run {
+            var next = self.state
+            let outgoing = try await self.coordinator.read(runtime)
+            next.workspaces[wi].groups[gi].remove(member)
+            var commands: [WindowCommand] = [.restore(member, safeAreas: self.displays.map(\.frame))]
+            // Start at the removed tab and wrap. Skip disconnected or user-minimized neighbors.
+            if !outgoing.minimized, !outgoing.fullscreen, outgoing.kind == .normal,
+                let index = pane.tabs.firstIndex(of: member)
+            {
+                for candidate in pane.tabs.dropFirst(index + 1) + pane.tabs.prefix(index) {
+                    guard let id = self.bindings[candidate] else { continue }
+                    let window = try await self.coordinator.read(id)
+                    guard window.kind == .normal, !window.fullscreen,
+                        !window.minimized || self.coordinator.journal.entries[candidate]?.minimizedByUs == true
+                    else { continue }
+                    next.workspaces[wi].groups[gi].activate(candidate)
+                    commands += [.reveal(candidate), .place(candidate, outgoing.frame)]
+                    if outgoing.focused { commands.append(.raise(candidate)) }
+                    break
+                }
             }
+            try await self.execute(commands) { try self.commit(next).get() }
         }
     }
     func exclude(_ member: UUID, app: Bool) {
