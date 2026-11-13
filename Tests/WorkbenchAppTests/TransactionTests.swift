@@ -199,3 +199,22 @@ import WorkbenchCore
     #expect(system.focusedIDs == [destination, original])
     #expect(system.windows[original]?.minimized == false && model.journalCount == 0)
 }
+
+@Test @MainActor func reconnectedFloatingMemberKeepsSavedDisplayRelativePosition() throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let controller = AppTestWindows(), old = controller.add(), replacement = controller.add()
+    let model = Workbench(directory: directory, controller: controller)
+    let saved = FloatingFrame(display: AppTestWindows.screen.id, relative: CGRect(x: 0.1, y: 0.2, width: 0.5, height: 0.4))
+    try model.change {
+        $0.workspaces[0].groups = [WindowGroup(name: "浮窗", floating: [old])]
+        $0.identities[old] = controller.windows[old]?.identity
+        $0.floatingFrames = [old: saved]
+    }.get()
+    controller.windows[old] = nil
+    model.update(Array(controller.windows.values), permission: true, screens: [AppTestWindows.screen])
+    try model.rebind(old, to: replacement).get()
+    #expect(model.state.floatingFrames?[replacement] == saved)
+    #expect(model.state.floatingFrames?[old] == nil)
+    #expect(model.coordinator.journal.entries[replacement] == nil)
+}

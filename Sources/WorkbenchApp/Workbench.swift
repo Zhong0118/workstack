@@ -391,6 +391,9 @@ final class Workbench: ObservableObject {
                     next.workspaces[wi].groups[gi] = g
                 }
             }
+            if let savedFrame = next.floatingFrames?.removeValue(forKey: member) {
+                next.floatingFrames?[live] = savedFrame
+            }
             next.identities[live] = w.identity
         }
     }
