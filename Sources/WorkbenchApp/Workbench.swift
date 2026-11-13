@@ -303,11 +303,15 @@ final class Workbench: ObservableObject {
         else { return }
         change { $0.workspaces[wi].groups.append(g.emptyCopy(name: g.name)) }
     }
-    func bind(_ window: UUID, to group: UUID, pane: UUID? = nil, edge: LayoutEdge = .center) {
+    @discardableResult
+    func bind(_ window: UUID, to group: UUID, pane: UUID? = nil, edge: LayoutEdge = .center) -> Result<Void, Error> {
         guard let live = windows.first(where: { $0.id == window }), live.kind == .normal, !live.fullscreen,
             let (wi, gi) = indices(group, in: state)
-        else { return }
-        change { next in
+        else { return rejected(tr("Unavailable window")) }
+        if let pane, state.workspaces[wi].groups[gi].root?.panes.contains(where: { $0.id == pane }) != true {
+            return rejected(tr("Changes could not be saved."))
+        }
+        return change { next in
             for i in next.workspaces.indices {
                 for j in next.workspaces[i].groups.indices where !(i == wi && j == gi) {
                     next.workspaces[i].groups[j].remove(window)

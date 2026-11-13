@@ -18,6 +18,17 @@ struct DeskNameRequest: Identifiable {
     let save: (String) -> Void
 }
 
+struct DeskComposeRequest: Identifiable {
+    let id = UUID()
+    let workspace: UUID
+    let member: UUID?
+}
+
+struct DeskLaunchRequest: Identifiable {
+    let id: UUID
+    let bundleID: String
+}
+
 struct DeskPickerRequest: Identifiable {
     let id = UUID()
     let group: UUID
@@ -38,6 +49,8 @@ struct Dashboard: View {
     @State var grid = true
     @State var naming: DeskNameRequest?
     @State var picker: DeskPickerRequest?
+    @State var composing: DeskComposeRequest?
+    @State var launchRequest: DeskLaunchRequest?
     @State var deleting: DeskNameRequest?
     @State var didLoad = false
     @FocusState var searchFocused: Bool
@@ -63,7 +76,8 @@ struct Dashboard: View {
                 Divider()
                 if let notice = model.notice, !notice.isEmpty {
                     HStack {
-                        Image(systemName: "info.circle").foregroundStyle(.blue)
+                        Image(systemName: model.noticeIsFailure ? "exclamationmark.triangle.fill" : "info.circle")
+                            .foregroundStyle(model.noticeIsFailure ? Color.orange : Color.blue)
                         Text(notice).font(.callout).textSelection(.enabled)
                         Spacer()
                         iconButton("Dismiss", "xmark") { model.notice = nil }
@@ -86,6 +100,20 @@ struct Dashboard: View {
         .animation(anim, value: selectedGroup)
         .sheet(item: $naming) { req in DeskNameSheet(request: req) }
         .sheet(item: $picker) { req in DeskPicker(request: req) }
+        .sheet(item: $composing) { request in
+            GroupComposer(request: request) { id in
+                if let group = model.groupList.first(where: { $0.id == id }) { selectGroup(group) }
+            }
+        }
+        .alert(
+            d("Open application?"), isPresented: Binding(get: { launchRequest != nil }, set: { if !$0 { launchRequest = nil } }),
+            presenting: launchRequest
+        ) { request in
+            Button(d("Open application")) { model.launchApplication(for: request.id) }
+            Button(d("Cancel"), role: .cancel) {}
+        } message: { request in
+            Text(d("Open this application so you can reconnect its window?") + "\n" + request.bundleID)
+        }
         .alert(
             deleting?.title ?? "", isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }),
             presenting: deleting
@@ -101,7 +129,7 @@ struct Dashboard: View {
             goHome()
         }
         .onChange(of: model.state.activeID) { _, id in
-            if let id { navigate(.workspace(id)) }
+            if let id, page != .workspace(id) { navigate(.workspace(id)) }
         }
         .onChange(of: workspaces.map(\.id)) { _, ids in
             if case let .workspace(id) = page, !ids.contains(id) { goHome() }
@@ -152,11 +180,8 @@ struct Dashboard: View {
     func addWorkspace() {
         naming = DeskNameRequest(title: d("New workspace"), value: "") { name in model.addWorkspace(name) }
     }
-    func addGroup(_ id: UUID) {
-        naming = DeskNameRequest(title: d("New window group"), value: "") { name in
-            model.addGroup(name, to: id)
-            if let g = workspaces.first(where: { $0.id == id })?.groups.last { selectGroup(g, edit: true) }
-        }
+    func addGroup(_ id: UUID, including member: UUID? = nil) {
+        composing = DeskComposeRequest(workspace: id, member: member)
     }
     @ViewBuilder var mainContent: some View {
         if !search.isEmpty {
@@ -228,6 +253,7 @@ struct Dashboard: View {
             .background(RoundedRectangle(cornerRadius: 7).fill(page == dest ? Color.accentColor.opacity(0.12) : .clear))
             .contentShape(Rectangle())
         }.buttonStyle(.plain)
+            .accessibilityValue(active ? d("Active workspace") : "")
     }
     var topBar: some View {
         HStack(spacing: 11) {
@@ -309,7 +335,7 @@ struct Dashboard: View {
         }
     }
     func moveGroup(_ id: UUID, to w: UUID) {
-        model.change { s in
+        let result = model.change { s in
             guard let src = s.workspaces.firstIndex(where: { $0.groups.contains(where: { $0.id == id }) }),
                 let dest = s.workspaces.firstIndex(where: { $0.id == w }),
                 let i = s.workspaces[src].groups.firstIndex(where: { $0.id == id })
@@ -317,7 +343,7 @@ struct Dashboard: View {
             let moved = s.workspaces[src].groups.remove(at: i)
             s.workspaces[dest].groups.append(moved)
         }
-        navigate(.workspace(w))
+        if case .success = result { navigate(.workspace(w)) }
     }
 }
 

@@ -154,3 +154,17 @@
 "Identity available" = "可匹配窗口标识";
 "Focus group" = "聚焦窗口组";
 "missing" = "个窗口待关联";
+"Missing windows" = "待关联的窗口";
+"Missing" = "待关联";
+"Create and apply" = "创建并应用";
+"Keep current window positions" = "保留当前窗口位置";
+"Remove unavailable selection" = "取消选择已断开的窗口";
+"This window stays visible when switching tabs or workspaces." = "切换标签或工作区时，工作台会跳过此窗口的最小化操作。";
+"Open application…" = "打开所属应用…";
+"Open application" = "打开应用";
+"Open application?" = "打开所属应用？";
+"Open this application so you can reconnect its window?" = "是否打开以下应用？窗口出现后，可手动重新关联。";
+"New group with this window" = "用此窗口新建组";
+"Add to group" = "加入窗口组";
+"Enter workspace" = "进入工作区";
+"Create empty group" = "创建空窗口组";

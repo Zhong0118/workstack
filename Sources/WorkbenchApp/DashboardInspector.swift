@@ -25,6 +25,7 @@ extension Dashboard {
                         Divider()
                         info("Window groups", String(w.groups.count))
                         info("Windows", String(w.groups.flatMap(\.memberIDs).count))
+                        if model.missingCount(in: w) > 0 { info("Missing windows", String(model.missingCount(in: w))) }
                         if model.state.activeID == w.id {
                             Label(d("Active workspace"), systemImage: "checkmark.circle").foregroundStyle(.blue)
                         } else {
@@ -72,6 +73,7 @@ extension Dashboard {
         info("Workspace", workspaces.first { $0.groups.contains(where: { $0.id == g.id }) }?.name ?? "—")
         info("Panes", String(g.root?.panes.count ?? 0))
         info("Windows", String(g.memberIDs.count))
+        Button(d("Add windows")) { picker = DeskPickerRequest(group: g.id) }.disabled(model.busy)
         Picker(
             d("Display"),
             selection: Binding(
@@ -119,7 +121,7 @@ extension Dashboard {
                         Text(model.displayName(id)).lineLimit(1)
                         Spacer()
                         if !model.windows.contains(where: { $0.id == id }) {
-                            Image(systemName: "link.badge.plus").foregroundStyle(.orange)
+                            Label(d("Missing"), systemImage: "link.badge.plus").font(.caption).foregroundStyle(.orange)
                         }
                     }.contentShape(Rectangle())
                 }.buttonStyle(.plain).onDrag { DeskPayload.window(id).provider }.contextMenu { memberMenu(id) }
@@ -140,7 +142,10 @@ extension Dashboard {
             info("Kind", d(w.kind.rawValue))
             info("Movement", d(w.movable ? "Movable" : "Fixed position"))
             info("Resizing", d(w.resizable ? "Resizable" : "Fixed size"))
-            info("Recovery", d(w.identity.permitsRecovery ? "Identity available" : "Manual reconnection"))
+            if !model.canSafelyMinimize(id) {
+                Label(d("This window stays visible when switching tabs or workspaces."), systemImage: "eye")
+                    .font(.callout).foregroundStyle(.secondary)
+            }
 
             info("Position", "\(Int(w.frame.minX)), \(Int(w.frame.minY))")
             info("Size", "\(Int(w.frame.width)) × \(Int(w.frame.height))")
@@ -155,6 +160,10 @@ extension Dashboard {
             Label(d("Window unavailable"), systemImage: "link.badge.plus").foregroundStyle(.orange)
             if let g = group {
                 Button(d("Reconnect window")) { picker = DeskPickerRequest(group: g.id, rebind: id) }
+                if let bundle = model.state.identities[id]?.bundleID, !bundle.isEmpty {
+                    Button(d("Open application…")) { launchRequest = DeskLaunchRequest(id: id, bundleID: bundle) }.disabled(
+                        model.busy)
+                }
             }
         }
         if let g = group {
@@ -163,12 +172,35 @@ extension Dashboard {
             info("Workspace", workspaces.first { $0.groups.contains(where: { $0.id == g.id }) }?.name ?? "—")
             info("Mode", d(g.floating.contains(id) ? "Floating" : "Tiled"))
             Button(d("Edit layout")) { selectGroup(g, edit: true) }
+            if let w = live, w.kind == .normal, !w.fullscreen { moveMemberMenu(id, owner: g.id) }
+            Button(d("Release from group")) { releaseMember(id) }.disabled(model.busy)
         }
         if live != nil {
             Button(d("Focus window")) { focusMember(id) }
+            if let w = live, w.kind == .normal, !w.fullscreen, let space = workspace {
+                Button(d("New group with this window")) { addGroup(space.id, including: id) }
+                if group == nil { moveMemberMenu(id, owner: nil) }
+            }
             PreviewButton(member: id)
         }
         Menu(d("Window actions")) { memberMenu(id) }
+    }
+    func releaseMember(_ id: UUID) {
+        model.release(id)
+        if !model.state.memberIDs.contains(id) { member = nil; pane = nil }
+    }
+    func moveMemberMenu(_ id: UUID, owner: UUID?) -> some View {
+        Menu(d(owner == nil ? "Add to group" : "Move to group")) {
+            ForEach(workspaces) { space in
+                Section(space.name) {
+                    ForEach(space.groups.filter { $0.id != owner }) { destination in
+                        Button(destination.name) {
+                            if case .success = model.bind(id, to: destination.id) { inspectMember(id) }
+                        }
+                    }
+                }
+            }
+        }.disabled(model.busy || !allGroups.contains(where: { $0.id != owner }))
     }
     func focusMember(_ id: UUID) {
         if let g = allGroups.first(where: { $0.root?.panes.contains(where: { $0.tabs.contains(id) }) == true }) {
@@ -197,17 +229,10 @@ extension Dashboard {
                     Button(d(key)) { model.tile(id, region: i) }
                 }
             }
-            Menu(d("Move to group")) {
-                ForEach(workspaces) { space in
-                    Section(space.name) {
-                        ForEach(space.groups.filter { $0.id != owner?.id }) { dest in
-                            Button(dest.name) {
-                                model.bind(id, to: dest.id); inspectMember(id)
-                            }
-                        }
-                    }
-                }
-            }.disabled(!allGroups.contains(where: { $0.id != owner?.id }))
+            moveMemberMenu(id, owner: owner?.id)
+            if let space = workspace {
+                Button(d("New group with this window")) { addGroup(space.id, including: id) }
+            }
             Menu(d("Create assignment rule")) {
                 ForEach(workspaces) { space in
                     Section(space.name) {
@@ -222,9 +247,7 @@ extension Dashboard {
             }.disabled(allGroups.isEmpty)
         }
         if owner != nil {
-            Button(d("Release from group")) {
-                model.release(id); member = nil; pane = nil
-            }
+            Button(d("Release from group")) { releaseMember(id) }.disabled(model.busy)
         }
         if w != nil {
             Divider()
@@ -253,6 +276,19 @@ struct DeskIcon: View {
     }
 }
 
+func deskWindowDetails(_ windows: [LiveWindow]) -> [UUID: String] {
+    var details: [UUID: String] = [:]
+    for peers in Dictionary(grouping: windows, by: \.bundleID).values {
+        for matches in Dictionary(grouping: peers, by: \.title).values where matches.count > 1 {
+            for (index, w) in matches.sorted(by: { $0.id.uuidString < $1.id.uuidString }).enumerated() {
+                let f = w.frame
+                details[w.id] = "\(w.appName) · #\(index + 1) · \(Int(f.minX)), \(Int(f.minY)) · \(Int(f.width)) × \(Int(f.height))"
+            }
+        }
+    }
+    return details
+}
+
 struct DeskWindowList: View {
     let windows: [LiveWindow]
     let select: (UUID) -> Void
@@ -263,6 +299,7 @@ struct DeskWindowList: View {
     @State var app = ""
     @State var dropTarget: UUID?
     var body: some View {
+        let details = deskWindowDetails(windows)
         let list = windows.filter {
             (app.isEmpty || app == $0.bundleID)
                 && (filter.isEmpty || ($0.title + " " + $0.appName).localizedCaseInsensitiveContains(filter))
@@ -295,7 +332,8 @@ struct DeskWindowList: View {
                             DeskIcon(id: w.id, size: 27)
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(w.title.isEmpty ? w.appName : w.title).fontWeight(.medium).lineLimit(1)
-                                Text(w.appName).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                                Text(details[w.id] ?? w.appName).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                                    .help(details[w.id] ?? w.appName)
                             }
                             Spacer(minLength: 0)
                             if w.minimized || w.fullscreen {
@@ -329,6 +367,7 @@ struct DeskPicker: View {
     @Environment(\.dismiss) var dismiss
     let request: DeskPickerRequest
     @State var selection: UUID?
+    @State private var error: String?
     var body: some View {
         let members = Set(model.state.workspaces.flatMap(\.groups).flatMap(\.memberIDs))
         let candidates = model.windows.filter { w in
@@ -355,7 +394,9 @@ struct DeskPicker: View {
                 DeskWindowList(windows: candidates, select: { selection = $0 }, selected: selection)
             }
             HStack {
-                if let selection,
+                if let error {
+                    Label(error, systemImage: "exclamationmark.triangle").font(.caption).foregroundStyle(.orange)
+                } else if let selection,
                     let owner = model.state.workspaces.flatMap(\.groups).first(where: { $0.memberIDs.contains(selection) })
                 {
                     Text(d("Current group") + " · " + owner.name).font(.caption).foregroundStyle(.secondary)
@@ -364,12 +405,13 @@ struct DeskPicker: View {
                 Button(d("Cancel")) { dismiss() }.keyboardShortcut(.cancelAction)
                 Button(d(request.rebind == nil ? "Add window" : "Reconnect")) {
                     guard let selection else { return }
-                    if let missing = request.rebind {
-                        model.rebind(missing, to: selection)
-                    } else {
-                        model.bind(selection, to: request.group, pane: request.pane)
+                    let result =
+                        request.rebind.map { model.rebind($0, to: selection) }
+                        ?? model.bind(selection, to: request.group, pane: request.pane)
+                    switch result {
+                    case .success: dismiss()
+                    case let .failure(failure): error = model.actionMessage(failure)
                     }
-                    dismiss()
                 }.keyboardShortcut(.defaultAction).disabled(!candidates.contains(where: { $0.id == selection }) || model.busy)
             }
         }.padding(22).frame(width: 480, height: 450)

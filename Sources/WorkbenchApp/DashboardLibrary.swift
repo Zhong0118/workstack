@@ -45,6 +45,8 @@ extension Dashboard {
                         if active { Image(systemName: "checkmark.circle.fill").foregroundStyle(.blue).help(d("Active workspace")) }
                     }
                     Text(workspaceDetail(w)).font(.caption).foregroundStyle(.secondary)
+                    Label(d("Enter workspace"), systemImage: "arrow.right.circle").font(.callout.weight(.medium)).foregroundStyle(
+                        .blue)
                 }.frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
             }.buttonStyle(.plain).disabled(model.busy)
                 .accessibilityHint(d("Activate workspace"))
@@ -191,7 +193,11 @@ extension Dashboard {
                     Color.secondary.opacity(0.24), style: StrokeStyle(lineWidth: 1, dash: [4, 4])))
     }
     func groupDetail(_ g: DeskGroup) -> String {
-        deskCount(g.root?.panes.count ?? 0, "pane", "panes") + "  ·  " + deskCount(g.memberIDs.count, "window", "windows")
+        let windows = deskCount(g.memberIDs.count, "window", "windows")
+        let panes = deskCount(g.root?.panes.count ?? 0, "pane", "panes")
+        let missing = g.memberIDs.filter { model.bindings[$0] == nil }.count
+        return [panes, windows, missing > 0 ? deskCount(missing, "missing", "missing") : nil]
+            .compactMap { $0 }.joined(separator: "  ·  ")
     }
     func groupCard(_ g: DeskGroup) -> some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -202,6 +208,7 @@ extension Dashboard {
                     if grid { DeskPreview(group: g).frame(height: small ? 70 : 95) }
                     Text(g.name).font(.headline).lineLimit(1)
                     Text(groupDetail(g)).font(.caption).foregroundStyle(.secondary)
+                    Label(d("Focus group"), systemImage: "scope").font(.callout.weight(.medium)).foregroundStyle(.blue)
                 }.frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
             }.buttonStyle(.plain).disabled(model.busy || g.memberIDs.isEmpty).accessibilityHint(d("Focus group"))
             HStack {
@@ -229,6 +236,13 @@ extension Dashboard {
                 HStack {
                     Text(d("All windows")).font(.largeTitle.weight(.semibold))
                     Spacer()
+                    if let workspace {
+                        Button {
+                            addGroup(workspace.id)
+                        } label: {
+                            Label(d("New window group"), systemImage: "plus")
+                        }
+                    }
                     iconButton("Refresh", "arrow.clockwise") { model.refresh() }
                 }
                 if !model.trusted { permissionBanner }
@@ -300,6 +314,7 @@ extension Dashboard {
     var searchResults: some View {
         let ws = workspaces.filter { $0.name.localizedCaseInsensitiveContains(search) }
         let gs = allGroups.filter { $0.name.localizedCaseInsensitiveContains(search) }
+        let details = deskWindowDetails(model.windows)
         let wins = model.windows.filter { ($0.appName + " " + $0.title).localizedCaseInsensitiveContains(search) }
         return ScrollView {
             VStack(alignment: .leading, spacing: 11) {
@@ -314,7 +329,10 @@ extension Dashboard {
                 }
                 if !wins.isEmpty { Text(d("Windows")).font(.headline).foregroundStyle(.secondary) }
                 ForEach(wins) { w in
-                    resultRow(w.title.isEmpty ? w.appName : w.title, symbol: "macwindow", detail: w.appName) {
+                    resultRow(
+                        w.title.isEmpty ? w.appName : w.title, symbol: "macwindow",
+                        detail: details[w.id] ?? w.appName
+                    ) {
                         navigate(.windows); inspectMember(w.id)
                     }
                 }

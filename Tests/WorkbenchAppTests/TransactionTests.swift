@@ -156,3 +156,46 @@ import WorkbenchCore
     #expect(Set(restarted.coordinator.journal.entries.keys) == [missing])
     #expect(restarted.coordinator.journal.entries[missing]?.minimizedByUs == true)
 }
+
+@Test @MainActor func bindToExpiredPanePreservesPriorMembershipAndLayout() throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let system = AppTestWindows(), transferring = system.add(), occupied = system.add()
+    let model = Workbench(directory: directory, controller: system)
+    model.update(Array(system.windows.values), permission: true, screens: [AppTestWindows.screen])
+    let old = WindowGroup(name: "Old", floating: [transferring])
+    let target = WindowGroup(name: "Target", root: .pane(id: UUID(), tabs: [occupied], active: occupied))
+    try model.change { $0.workspaces[0].groups = [old, target] }.get()
+    let state = model.state
+    let failed = model.bind(transferring, to: target.id, pane: UUID())
+    #expect(throws: (any Error).self) { try failed.get() }
+    #expect(model.state == state)
+    #expect(model.noticeIsFailure)
+}
+
+@Test @MainActor func activationSaveFailureRestoresLeasesFocusAndEngagedGroups() async throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let system = AppTestWindows(), original = system.add(), destination = system.add()
+    system.windows[original]?.focused = true
+    let model = Workbench(directory: directory, controller: system)
+    model.update(Array(system.windows.values), permission: true, screens: [AppTestWindows.screen])
+    let previous = WindowGroup(name: "Previous", floating: [original])
+    let target = Workspace(name: "Target", groups: [WindowGroup(name: "Target", floating: [destination])])
+    try model.change {
+        $0.workspaces[0].groups = [previous]
+        $0.workspaces.append(target)
+        $0.prefs.switchMode = .concentrate
+    }.get()
+    model.engagedGroups.insert(previous.id)
+    let state = model.state, history = model.history
+    try FileManager.default.moveItem(at: model.configURL, to: directory.appendingPathComponent("original"))
+    try FileManager.default.createDirectory(at: model.configURL, withIntermediateDirectories: false)
+    model.activate(target.id)
+    try await settle(model)
+    #expect(model.failedOperations == 1 && model.noticeIsFailure)
+    #expect(model.state == state && model.history == history)
+    #expect(model.engagedGroups == [previous.id])
+    #expect(system.focusedIDs == [destination, original])
+    #expect(system.windows[original]?.minimized == false && model.journalCount == 0)
+}

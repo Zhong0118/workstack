@@ -48,6 +48,19 @@ extension Dashboard {
                 .frame(maxWidth: .infinity)
                 Text(d("Drop a window in the center to add a tab or on an edge to split. Drag a divider to resize."))
                     .font(.caption).foregroundStyle(.secondary)
+                let missing = g.memberIDs.filter { model.bindings[$0] == nil }
+                if !missing.isEmpty {
+                    Text(d("Missing windows")).font(.headline)
+                    ForEach(missing, id: \.self) { id in
+                        HStack {
+                            Image(systemName: "link.badge.plus").foregroundStyle(.orange)
+                            Text(model.displayName(id)).lineLimit(1)
+                            Spacer()
+                            Button(d("Reconnect")) { picker = DeskPickerRequest(group: g.id, rebind: id) }
+                            iconButton("Release from group", "minus.circle") { releaseMember(id) }
+                        }
+                    }
+                }
                 if !g.floating.isEmpty {
                     Text(d("Floating windows")).font(.headline)
                     ForEach(g.floating, id: \.self) { id in editorWindow(id, g: g) }
@@ -218,7 +231,11 @@ enum DeskPayload: Sendable {
                 }.padding(5)
                 Spacer(minLength: 0)
                 if let active = p.active, !p.tabs.isEmpty {
-                    if p.frame.height > 82 { DeskIcon(id: active, size: min(37, p.frame.width * 0.28)) }
+                    if model.bindings[active] == nil {
+                        Label(d("Missing"), systemImage: "link.badge.plus").font(.caption).foregroundStyle(.orange)
+                    } else if p.frame.height > 82 {
+                        DeskIcon(id: active, size: min(37, p.frame.width * 0.28))
+                    }
                     Text(model.displayName(active)).font(.callout.weight(.medium)).lineLimit(2).multilineTextAlignment(.center)
                         .padding(.horizontal, 5).onDrag { DeskPayload.window(active).provider }
                 } else {
@@ -231,7 +248,7 @@ enum DeskPayload: Sendable {
                             ForEach(p.tabs, id: \.self) { id in
                                 Button {
                                     select(p.id, id)
-                                    model.selectTab(id, group: g.id)
+                                    model.editGroup(g.id) { $0.activate(id) }
                                 } label: {
                                     Text(model.displayName(id)).font(.caption2).lineLimit(1).frame(maxWidth: 70)
                                         .padding(.horizontal, 4).padding(.vertical, 3)
