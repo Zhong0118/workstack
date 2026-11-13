@@ -87,7 +87,9 @@ import WorkbenchCore
             print("integration=passed windows=4 apps=2 isolation=fixture_pids")
             return 0
         } catch {
-            print("integration=failed reason=\(error) notice=\(model.notice ?? "-")")
+            print(
+                "integration=failed reason=\(error) notice=\(model.notice ?? "-") last=\(String(describing: model.coordinator.lastAttempt))"
+            )
             if !model.terminating { await model.finish() }
             return 1
         }
@@ -106,20 +108,27 @@ import WorkbenchCore
         }
     }
 
-    /// Invoke the same SwiftUI Button through the QA panel's own AppKit accessibility tree.
-    private static func tabButton(_ id: UUID, in panel: NSPanel?) -> (any NSAccessibilityProtocol)? {
-        guard let root = panel?.contentView else { return nil }
-        let wanted = "workstack.tab." + id.uuidString
-        var queue: [Any] = [root]
-        var seen = Set<ObjectIdentifier>()
-        while let next = queue.popLast() {
-            guard let element = next as? any NSAccessibilityProtocol,
-                seen.insert(ObjectIdentifier(element)).inserted
-            else { continue }
-            if element.accessibilityIdentifier() == wanted && element.accessibilityRole() == .button { return element }
-            queue.append(contentsOf: element.accessibilityChildren() ?? [])
+    private static func pressTab(_ id: UUID, fixture: NSRunningApplication, confirmed: () -> Bool) async throws {
+        guard let executable = fixture.executableURL, !fixture.isTerminated else { throw Failure("fixture helper unavailable") }
+        let child = Process()
+        child.executableURL = executable
+        child.arguments = ["--press-test-tab", String(ProcessInfo.processInfo.processIdentifier), id.uuidString]
+        let output = Pipe()
+        child.standardOutput = output
+        try child.run()
+        defer { if child.isRunning { child.terminate() } }
+        try await wait("tab AXPress or helper exit") { confirmed() || !child.isRunning }
+        if !confirmed() && (child.isRunning || child.terminationStatus == 0) {
+            try await wait("button changed tab", until: confirmed)
         }
-        return nil
+        let end = ProcessInfo.processInfo.systemUptime
+        try await wait("tab AXPress helper") { !child.isRunning }
+        let bytes = try output.fileHandleForReading.readToEnd() ?? Data()
+        let message = String(decoding: bytes, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard child.terminationStatus == 0, let start = Double(message), start <= end else {
+            throw Failure("tab AXPress failed (\(child.terminationStatus)): " + message)
+        }
+        print(String(format: "strip_axpress_to_published_focus_ms=%.1f", 1000 * (end - start)))
     }
 
     private static func exercise(_ model: Workbench, apps: [NSRunningApplication]) async throws {
@@ -241,25 +250,42 @@ import WorkbenchCore
                 complete: { !model.busy },
                 confirm: { index in
                     let other = index.isMultiple(of: 2)
-                    try require(model.notice == nil && model.state.activeID == (other ? second : ws), "workspace commit")
+                    try require(
+                        model.notice == nil && model.state.activeID == (other ? second : ws), "workspace commit at sample \(index)")
                     let minimized: Set<UUID> = other ? [tabA, tabB, side] : [tabB, spare]
                     try await wait("published workspace visibility and focus") {
                         Set(fixtures().filter(\.minimized).map(\.id)) == minimized
                             && fixtures().contains { $0.focused && !$0.minimized }
                     }
                 })
+            model.change { $0.prefs.hidePrevious = false }
+            for target in [second, ws] {
+                model.activate(target)
+                try await settle()
+                try await wait("warm layout") {
+                    fixtures().contains { $0.id == spare && !$0.minimized }
+                        && (target == second || fixtures().contains { $0.id == tabA && !$0.minimized })
+                }
+            }
+            try await IntegrationTiming.measure(
+                "warm_arrange", action: { model.activate($0.isMultiple(of: 2) ? second : ws) },
+                complete: { !model.busy },
+                confirm: { index in
+                    let other = index.isMultiple(of: 2)
+                    try require(model.notice == nil && model.state.activeID == (other ? second : ws), "warm workspace commit")
+                    let visible: Set<UUID> = other ? [spare] : [side, tabA]
+                    try await wait("warm workspace focus") {
+                        fixtures().contains { visible.contains($0.id) && $0.focused && !$0.minimized }
+                    }
+                })
+            model.change { $0.prefs.hidePrevious = true }
         }
         // Workspace activation can focus the side pane. Select the tab to expose its strip again.
         model.selectTab(tabA, group: group)
         try await settle()
-        try await wait("accessible tab strip") { tabButton(tabB, in: visibleStrips().first) != nil }
-        guard let button = tabButton(tabB, in: visibleStrips().first) else { throw Failure("tab button missing") }
-        let press = ContinuousClock.now
-        try require(button.accessibilityPerformPress(), "tab button rejected accessibility press")
-        try await wait("button changed tab") { fixtures().contains { $0.id == tabB && $0.focused } }
-        print(String(format: "strip_press_to_published_focus_ms=%.1f", IntegrationTiming.ms(since: press)))
+        try await wait("visible tab strip") { !visibleStrips().isEmpty }
+        try await pressTab(tabB, fixture: apps[0]) { fixtures().contains { $0.id == tabB && $0.focused } }
         try await settle()
-        try await wait("tab published before undo") { fixtures().contains { $0.id == tabB && $0.focused } }
         model.undo()
         try await settle()
         try await wait("undo restored external tab and focus") {
@@ -299,6 +325,46 @@ import WorkbenchCore
             model.coordinator.journal.entries[spare] == nil && !released.minimized
                 && released.frame.roughlyEquals(right[1].frame), "deleted workspace retained its fixture")
         print("integration_step=repeat_switch_and_delete passed")
+
+        let created = try await model.createAndApplyGroup(
+            name: "Fixture pair", workspace: ws, members: [spare, side], preset: .columns
+        ).get()
+        let saved = try LocalFile.read(WorkbenchState.self, from: model.configURL)
+        try require(
+            saved.workspaces.first(where: { $0.id == ws })?.groups.first(where: { $0.id == created })?.memberIDs
+                == [spare, side], "created pair membership")
+        let firstColumn = try await actual(spare), secondColumn = try await actual(side)
+        try require(
+            !firstColumn.minimized && !secondColumn.minimized && firstColumn.frame.maxX <= secondColumn.frame.minX + 2,
+            "created pair did not apply its split")
+        try await wait("created pair focus") { fixtures().contains { $0.id == spare && $0.focused } }
+        print("integration_step=create_and_apply_pair passed")
+
+        let stalled = apps[0]
+        let pid = stalled.processIdentifier
+        func stillFixture() -> Bool {
+            guard !stalled.isTerminated, let now = NSRunningApplication(processIdentifier: pid) else { return false }
+            return now.launchDate == stalled.launchDate && now.bundleURL == stalled.bundleURL
+                && now.bundleIdentifier == "local.windowworkbench.qa.Fixture"
+        }
+        let beforeTimeout = model.state
+        let failures = model.failedOperations
+        guard stillFixture(), kill(pid, SIGSTOP) == 0 else { throw Failure("could not suspend owned fixture") }
+        do {
+            defer { if stillFixture() { _ = kill(pid, SIGCONT) } }
+            let start = ContinuousClock.now
+            model.focus(side)
+            try await wait("timeout on stalled fixture") { !model.busy }
+            try require(
+                model.failedOperations == failures + 1 && model.state == beforeTimeout && model.notice != nil,
+                "timeout did not preserve state")
+            print(
+                String(format: "integration_step=unresponsive_fixture passed elapsed_ms=%.1f", IntegrationTiming.ms(since: start)))
+        }
+        model.notice = nil
+        model.focus(side)
+        try await settle()
+        try await wait("resumed fixture focus") { fixtures().contains { $0.id == side && $0.focused } }
 
         // An independent observer outlives model.finish(), which stops the app's backend.
         let observer = MacWindows(allowedApplications: apps)

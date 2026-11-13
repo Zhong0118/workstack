@@ -11,6 +11,11 @@ struct WindowProbe {
             runFixture(app, count: count)
             return
         }
+        if arguments.count == 3, arguments[0] == "--press-test-tab", let pid = pid_t(arguments[1]),
+            let tab = UUID(uuidString: arguments[2])
+        {
+            exit(TabPressProbe.run(parent: pid, tab: tab))
+        }
         let recovery = arguments.count == 2 && arguments.first == "--recovery-smoke"
         guard arguments.isEmpty || arguments == ["--smoke"] || arguments == ["--benchmark"] || recovery else {
             print("Usage: window-probe [--smoke | --benchmark | --recovery-smoke Fixture.app]")

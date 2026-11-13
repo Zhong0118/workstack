@@ -14,6 +14,12 @@ if [[ "${2:-}" == --qa && $# == 3 ]]; then
     [[ ! -e "$app" && ! -L "$app" && ! -e "$scratch/build" && ! -L "$scratch/build" ]]
     bundle_id=local.windowworkbench.qa
     build+=(--scratch-path "$scratch/build")
+elif [[ "${2:-}" == --output && $# == 3 ]]; then
+    app="$3/workstack.app"
+    if [[ -e "$app" || -L "$app" ]]; then
+        echo "目标目录中已存在 workstack.app，请选择新目录。" >&2
+        exit 1
+    fi
 elif [[ $# -gt 1 ]]; then
     exit 64
 fi
