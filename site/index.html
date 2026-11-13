@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="zh-Hans">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#f7f8fc">
+  <meta name="description" content="workstack 是原生 macOS 窗口工作台。把真实窗口组成标签、分屏和工作区，按项目恢复桌面布局。">
+  <title>workstack · Mac 窗口工作台</title>
+  <link rel="icon" href="assets/workstack.png" type="image/png">
+  <link rel="stylesheet" href="workstack.css">
+  <script src="demo.js" defer></script>
+</head>
+<body>
+  <a class="skip" href="#main">跳到正文</a>
+  <header class="top"><nav class="wrap" aria-label="主导航">
+    <a class="brand" href="#main"><img src="assets/workstack.png" width="38" height="38" alt="">workstack</a>
+    <div class="links"><a href="#modes">切换模式</a><a href="#build">构建指南</a><a class="repo" href="https://github.com/Zhong0118/workstack">GitHub <span aria-hidden="true">↗</span></a></div>
+  </nav></header>
+  <main id="main" class="wrap">
+    <section class="hero" aria-labelledby="hero-title">
+      <div class="intro">
+        <p class="platform">macOS 窗口工作台</p>
+        <h1 id="hero-title">切回项目<br>窗口各就各位</h1>
+        <p class="lede">把编辑器、浏览器和终端放进一个工作区。保存分屏和跨应用标签，下次单击项目名称，就能回到原来的窗口布局。</p>
+        <div class="actions"><a class="primary" href="#build">从源码构建 <span aria-hidden="true">↓</span></a><a class="quiet" href="#modes">了解切换模式</a></div>
+      </div>
+      <figure class="demo" aria-labelledby="demo-caption">
+        <div class="board">
+          <div class="demo-head"><span>工作区</span><div class="switch" aria-label="演示工作区"><button data-space="dev" aria-pressed="true">开发</button><button data-space="write" aria-pressed="false">写作</button></div></div>
+          <div class="desktop" data-layout="dev">
+            <div class="pane main-pane"><div class="bar"><span class="glyph code" aria-hidden="true"></span><strong id="main-name">编辑器</strong></div>
+              <div class="paper"><span class="doc-label" id="doc-label">工作区配置</span><div class="strokes" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i></div></div>
+            </div>
+            <div class="pane side-pane"><div class="tab-row" aria-label="演示窗口标签"><button class="tab" id="tab0" aria-pressed="true">浏览器</button><button class="tab" id="tab1" aria-pressed="false">终端</button></div>
+              <div class="paper side-paper"><span class="doc-label" id="side-label">开发文档</span><div class="strokes" aria-hidden="true"><i></i><i></i><i></i></div></div>
+            </div>
+            <div class="pane files-pane"><div class="bar"><span class="glyph folder" aria-hidden="true"></span><strong>访达</strong></div><div class="files" id="file-list"><span>源文件</span><span>项目资料</span></div></div>
+          </div>
+        </div>
+        <figcaption id="demo-caption"><span>布局示意</span><span id="demo-status" aria-live="polite">开发工作区 · 浏览器在前</span></figcaption>
+      </figure>
+    </section>
+
+    <section id="modes" class="modes" aria-labelledby="modes-title">
+      <div class="section-title"><h2 id="modes-title">进入工作区时</h2><p>在设置中选择一种切换方式</p></div>
+      <div class="mode-grid">
+        <article><div class="mini focus" aria-hidden="true"><i></i><i></i></div><h3>聚焦</h3><p>让项目窗口回到前面，保留手动调整过的位置和大小。</p></article>
+        <article><div class="mini arrange" aria-hidden="true"><i></i><i></i><i></i></div><h3>排布 <small>默认</small></h3><p>恢复保存的分屏、显示器和浮动窗口位置，最后聚焦一个窗口。</p></article>
+        <article><div class="mini concentrate" aria-hidden="true"><i></i><i></i></div><h3>专注</h3><p>排布当前项目，并收起上个工作区中可以安全恢复的窗口。需手动开启。</p></article>
+      </div>
+    </section>
+
+    <section id="build" class="build" aria-labelledby="build-title">
+      <div><h2 id="build-title">在你的 Mac 上构建</h2><p>部署目标为 macOS 14 或更高版本。准备好 Swift 6、macOS SDK 和仓库读取权限，在项目根目录运行以下命令。</p><a class="quiet" href="https://github.com/Zhong0118/workstack#readme">查看仓库使用说明 <span aria-hidden="true">↗</span></a></div>
+      <div class="terminal"><div class="terminal-head"><span>终端</span><button id="copy" type="button">复制命令</button></div><pre><code id="commands">Scripts/package.sh release --output dist/local-preview
+open dist/local-preview/workstack.app</code></pre><span id="copy-status" role="status"></span></div>
+    </section>
+    <details><summary>首次启动需要哪些权限？</summary><p>在系统设置的「隐私与安全性 → 辅助功能」中允许 workstack 管理窗口。可选的窗口预览需要单独授权屏幕录制，默认关闭。</p></details>
+    <details><summary>切换项目后，原来的窗口会怎样？</summary><p>窗口继续由原应用运行。对于缺少可靠身份的窗口，workstack 保留其可见性并通过前置切换。手动最小化的窗口保持原状；工作区会为已关闭的窗口保留可重新关联的占位。</p></details>
+  </main>
+  <footer class="wrap"><span>workstack</span><a href="#main">返回顶部 ↑</a></footer>
+</body>
+</html>
