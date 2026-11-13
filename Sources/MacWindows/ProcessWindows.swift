@@ -287,6 +287,11 @@ final class ProcessWindows: @unchecked Sendable {
         try verify { try e.frame()?.roughlyEquals(target) == true }
     }
 
+    func orderFront(_ id: UUID) throws {
+        let e = try writableWindow(id)
+        try checkAX(AXUIElementPerformAction(e.raw, kAXRaiseAction as CFString))
+    }
+
     func raise(_ id: UUID) throws {
         let e = try writableWindow(id)
         // Cooperative NSRunningApplication activation can decline a request from a

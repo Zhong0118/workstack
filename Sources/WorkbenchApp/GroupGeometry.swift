@@ -20,8 +20,8 @@ extension Workbench {
         }
         document.floatingFrames = frames
     }
-    func floatingFrame(_ id: UUID, group: WindowGroup) -> CGRect? {
-        guard let saved = state.floatingFrames?[id],
+    func floatingFrame(_ id: UUID, group: WindowGroup, document: WorkbenchState) -> CGRect? {
+        guard let saved = document.floatingFrames?[id],
             let monitor = displays.first(where: { $0.id == (group.displayID ?? saved.display) }) ?? displays.first
         else { return nil }
         let area = monitor.frame

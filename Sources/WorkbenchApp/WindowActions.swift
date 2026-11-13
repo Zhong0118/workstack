@@ -4,24 +4,64 @@ import MacWindows
 
 extension Workbench {
     func run(_ operation: @escaping @MainActor () async throws -> Void) {
-        guard !busy, !readOnly, !terminating else { return }
+        guard !busy, !terminating else {
+            notice = tr("Wait for the current operation to finish.")
+            noticeIsFailure = true
+            return
+        }
+        guard !readOnly else {
+            notice = tr("Configuration could not be read. Your saved files have been preserved.")
+            noticeIsFailure = true
+            return
+        }
         busy = true
+        notice = nil
         Task {
             defer { busy = false; panelManager?.sync() }
-            do { try await operation(); completedOperations += 1 } catch {
+            do {
+                try await operation()
+                completedOperations += 1
+            } catch {
                 failedOperations += 1
-                notice = tr("A window did not accept the operation. Check Recovery in Settings.")
-                if ProcessInfo.processInfo.environment["WW_INTEGRATION_CHECK"] != nil {
-                    print("fixture command error: \(String(describing:coordinator.lastAttempt)) \(error)")
-                }
+                reportFailure(error)
             }
         }
     }
 
-    func execute(_ commands: [WindowCommand]) async throws {
+    func reportFailure(_ error: Error) {
+        notice = actionMessage(error)
+        noticeIsFailure = true
+    }
+
+    func actionMessage(_ error: Error) -> String {
+        if let localized = error as? LocalizedError, let message = localized.errorDescription { return message }
+        if let error = error as? ControlError {
+            switch error {
+            case .unavailable: return "窗口已关闭或状态发生变化，操作未完成。请刷新并检查窗口连接。"
+            case .unexpectedFrame: return "应用未接受请求的位置或尺寸，已尝试撤回本次布局。"
+            case .recoveryRequired: return "窗口身份与恢复记录不一致，请在检查器中核对连接。"
+            }
+        }
+        return "操作未完成。请检查保存位置和窗口恢复记录。"
+    }
+
+    func missingCount(in workspace: Workspace) -> Int {
+        workspace.groups.flatMap(\.memberIDs).filter { bindings[$0] == nil }.count
+    }
+
+    func canSafelyMinimize(_ member: UUID) -> Bool {
+        guard let w = windows.first(where: { $0.id == member }), w.kind == .normal,
+            !w.fullscreen, w.minimizable, w.identity.permitsRecovery
+        else { return false }
+        return raw.filter { $0.identity == w.identity }.count == 1
+    }
+
+    func execute(_ commands: [WindowCommand], commit: () throws -> Void = {}) async throws {
+        guard commands.isEmpty || trusted else { throw WindowAccessError.permission }
         let counts = Dictionary(grouping: raw, by: \.identity)
         let safe = Set(windows.filter { counts[$0.identity]?.count == 1 && $0.identity.permitsRecovery }.map(\.id))
-        try await coordinator.perform(commands, binding: bindings, unique: safe)
+        let previous = windows.first { window in window.focused && commands.contains { $0.member == window.id } }?.id
+        try await coordinator.perform(commands, binding: bindings, unique: safe, previousFocus: previous, commit: commit)
     }
     func restoreMembers(_ members: [UUID]) async throws {
         var failure: Error?
@@ -41,10 +81,10 @@ extension Workbench {
                 ? tr("Restored managed windows.") : tr("Unmatched windows were left untouched.")
         }
     }
-    func area(for group: WindowGroup, among peers: [WindowGroup]) -> CGRect? {
+    func area(for group: WindowGroup, among peers: [WindowGroup], document: WorkbenchState) -> CGRect? {
         guard let display = displays.first(where: { $0.id == group.displayID }) ?? displays.first else { return nil }
         let rect = display.frame
-        if let saved = state.groupAreas[group.id] {
+        if let saved = document.groupAreas[group.id] {
             let proposed = CGRect(
                 x: rect.minX + saved.minX * rect.width, y: rect.minY + saved.minY * rect.height,
                 width: rect.width * saved.width, height: rect.height * saved.height
@@ -64,81 +104,106 @@ extension Workbench {
         ).integral
     }
 
-    func commands(_ g: WindowGroup, among peers: [WindowGroup], raise: Bool) -> [WindowCommand] {
-        guard let bounds = area(for: g, among: peers) else { return [] }
-        var commands: [WindowCommand] = []
-        for p in g.placements(in: bounds, gap: state.prefs.gap) {
-            let available = p.tabs.filter { id in
-                windows.contains { w in
-                    w.id == id && !w.fullscreen && w.kind == .normal
-                        && (!w.minimized || coordinator.journal.entries[id]?.minimizedByUs == true)
+    /// Compute the whole workspace before surfacing peer windows and selecting one keyboard target.
+    func plannedCommands(
+        for groups: [WindowGroup], peers: [WindowGroup], mode: WorkspaceSwitchMode,
+        preferred: UUID? = nil, bringForward: Bool = true, document: WorkbenchState? = nil
+    ) -> [WindowCommand] {
+        let document = document ?? state
+        let live = Dictionary(uniqueKeysWithValues: windows.map { ($0.id, $0) })
+        func available(_ id: UUID) -> Bool {
+            guard let w = live[id], w.kind == .normal, !w.fullscreen else { return false }
+            return !w.minimized || coordinator.journal.entries[id]?.minimizedByUs == true
+        }
+        var result = [WindowCommand]()
+        var visible = [UUID]()
+        for group in groups {
+            guard let area = area(for: group, among: peers, document: document) else { continue }
+            for pane in group.placements(in: area, gap: document.prefs.gap) {
+                let tabs = pane.tabs.filter(available)
+                guard let active = pane.active.flatMap({ tabs.contains($0) ? $0 : nil }) ?? tabs.first else { continue }
+                visible.append(active)
+                result.append(.reveal(active))
+                if mode != .focus {
+                    var rect = pane.frame
+                    if pane.tabs.count > 1, rect.height > 110 {
+                        let height = TabPanels.height(document.prefs)
+                        rect.size.height -= height
+                        if document.prefs.tabPosition == "top" { rect.origin.y += height }
+                    }
+                    result.append(.place(active, rect))
+                    for id in tabs where id != active {
+                        result.append(document.prefs.minimizeTabs && canSafelyMinimize(id) ? .conceal(id) : .reveal(id))
+                    }
                 }
             }
-            guard let active = p.active.flatMap({ available.contains($0) ? $0 : nil }) ?? available.first else { continue }
-            var rect = p.frame
-            if p.tabs.count > 1, rect.height > 110 {
-                rect.size.height -= TabPanels.height(state.prefs)
-                if state.prefs.tabPosition == "top" { rect.origin.y += TabPanels.height(state.prefs) }
-            }
-            commands.append(.reveal(active))
-            commands.append(.place(active, rect))
-            for id in available where id != active {
-                if state.prefs.minimizeTabs, windows.first(where: { $0.id == id })?.identity.permitsRecovery == true {
-                    commands.append(.conceal(id))
-                } else {
-                    // Focus-only floating fallback: preserve unsupported siblings at their native positions.
-                    commands.append(.reveal(id))
+            for id in group.floating where available(id) {
+                visible.append(id)
+                result.append(.reveal(id))
+                if mode != .focus, let frame = floatingFrame(id, group: group, document: document) {
+                    result.append(.place(id, frame))
                 }
             }
-            if raise { commands.append(.raise(active)) }
         }
-        for id in g.floating {
-            commands.append(.reveal(id))
-            if let frame = floatingFrame(id, group: g) { commands.append(.place(id, frame)) }
-            if raise { commands.append(.raise(id)) }
+        if bringForward,
+            let target = preferred.flatMap({ visible.contains($0) ? $0 : nil })
+                ?? visible.first(where: { live[$0]?.focused == true }) ?? visible.first
+        {
+            result += visible.filter { $0 != target }.map(WindowCommand.surface)
+            result.append(.raise(target))
         }
-        return commands
+        return result
     }
+
     func arrange(_ groups: [WindowGroup], focusLast: Bool) async throws {
-        let cmds = groups.flatMap { commands($0, among: groups, raise: focusLast) }
-        try await execute(cmds)
+        try await execute(
+            plannedCommands(for: groups, peers: activeWorkspace?.groups ?? groups, mode: .arrange, bringForward: focusLast))
         engagedGroups.formUnion(groups.map(\.id))
     }
-    func apply(_ group: UUID) {
-        guard let (wi, gi) = indices(group, in: state) else { return }
-        let ws = state.workspaces[wi]
-        if state.activeID != ws.id { activate(ws.id); return }
-        run {
-            try await self.execute(self.commands(ws.groups[gi], among: ws.groups, raise: true))
-            self.engagedGroups.insert(group)
-        }
+
+    func apply(_ group: UUID) { enterGroup(group, mode: .arrange) }
+    func focusGroup(_ group: UUID) { enterGroup(group, mode: .focus) }
+
+    private func enterGroup(_ id: UUID, mode: WorkspaceSwitchMode) {
+        guard let (wi, gi) = indices(id, in: state) else { return }
+        let workspace = state.workspaces[wi]
+        run { try await self.enter(workspace, groups: [workspace.groups[gi]], mode: mode) }
     }
+
     func activate(_ workspace: UUID) {
-        guard !busy, let target = state.workspaces.first(where: { $0.id == workspace }) else { return }
+        guard let target = state.workspaces.first(where: { $0.id == workspace }) else { return }
+        run { try await self.enter(target, groups: target.groups, mode: self.state.prefs.switchMode) }
+    }
+
+    private func enter(_ workspace: Workspace, groups: [WindowGroup], mode: WorkspaceSwitchMode) async throws {
         let previous = activeWorkspace
         var next = state
-        if previous?.id != workspace { captureFloating(in: previous, document: &next) }
-        run {
-            var cmds: [WindowCommand] = []
-            if self.trusted {
-                if self.state.prefs.hidePrevious, let previous, previous.id != workspace {
-                    cmds += previous.groups.flatMap(\.memberIDs).map(WindowCommand.conceal)
-                }
-                if self.state.prefs.switchLayouts {
-                    cmds += target.groups.flatMap { self.commands($0, among: target.groups, raise: true) }
-                } else {
-                    cmds += target.groups.flatMap(\.memberIDs).flatMap { [WindowCommand.reveal($0), .raise($0)] }
-                }
-                try await self.execute(cmds)
-            }
-            self.engagedGroups = Set(target.groups.map(\.id))
-            next.activeID = workspace
-            next.recent.removeAll { $0 == workspace }
-            next.recent.insert(workspace, at: 0)
-            self.commit(next, remember: previous?.id != workspace)
+        let switching = previous?.id != workspace.id
+        if switching { captureFloating(in: previous, document: &next) }
+        let members = groups.flatMap(\.memberIDs)
+        guard trusted || members.isEmpty else { throw WindowAccessError.permission }
+        let planned = plannedCommands(for: groups, peers: workspace.groups, mode: mode)
+        var cmds: [WindowCommand] = []
+        // An empty/missing destination must not take away the user's current windows.
+        if switching, state.prefs.switchMode == .concentrate, !planned.isEmpty {
+            cmds = (previous?.groups.flatMap(\.memberIDs) ?? []).filter(canSafelyMinimize).map(WindowCommand.conceal)
+        }
+        next.activeID = workspace.id
+        next.recent.removeAll { $0 == workspace.id }
+        next.recent.insert(workspace.id, at: 0)
+        try await execute(cmds + planned) { try self.commit(next, remember: switching).get() }
+        if switching { engagedGroups.removeAll() }
+        engagedGroups.formUnion(groups.map(\.id))
+        let missing = members.filter { bindings[$0] == nil }.count
+        if missing > 0 {
+            notice = "有 \(missing) 个窗口未连接。布局占位已保留，可在检查器中重新关联。"
+        } else if !members.isEmpty && planned.isEmpty {
+            notice = "此组窗口当前不可操作，请检查最小化、全屏或显示器状态。"
         }
     }
+
     func focus(_ member: UUID) {
+        guard bindings[member] != nil else { reportFailure(WindowAccessError.unavailable); return }
         if let g = groupList.first(where: {
             $0.root?.panes.contains(where: { $0.tabs.count > 1 && $0.tabs.contains(member) }) == true
         }) {
@@ -147,36 +212,44 @@ extension Workbench {
             run { try await self.execute([.reveal(member), .raise(member)]) }
         }
     }
+
     func selectTab(_ member: UUID, group: UUID) {
         guard let (wi, gi) = indices(group, in: state),
-            let pane = state.workspaces[wi].groups[gi].root?.panes.first(where: { $0.tabs.contains(member) }),
-            let w = windows.first(where: { $0.id == member }),
-            !w.minimized || coordinator.journal.entries[member]?.minimizedByUs == true
+            let pane = state.workspaces[wi].groups[gi].root?.panes.first(where: { $0.tabs.contains(member) })
         else { return }
-        let ws = state.workspaces[wi]
-        var g = ws.groups[gi]
+        guard let w = windows.first(where: { $0.id == member }) else {
+            reportFailure(WindowAccessError.unavailable); return
+        }
+        guard !w.fullscreen, w.kind == .normal, !w.minimized || coordinator.journal.entries[member]?.minimizedByUs == true
+        else { notice = "此窗口当前不可切换，请先在原应用中恢复窗口。"; return }
+        var ws = state.workspaces[wi]
+        ws.groups[gi].activate(member)
+        let switching = state.activeID != ws.id
         let previous = windows.first { $0.id == pane.active && !$0.minimized && !$0.fullscreen }
-        g.activate(member)
         run {
-            var cmds: [WindowCommand] = [.reveal(member)]
-            if self.activeWorkspace?.id != ws.id {
-                if self.state.prefs.hidePrevious {
-                    cmds += (self.activeWorkspace?.groups.flatMap(\.memberIDs) ?? []).map(WindowCommand.conceal)
-                }
-                cmds += ws.groups.flatMap { self.commands($0.id == group ? g : $0, among: ws.groups, raise: true) }
-            } else if let previous, previous.id != member {
-                cmds.append(.place(member, previous.frame))
-            }
-            cmds.append(.raise(member))
-            for id in pane.tabs where id != member {
-                cmds.append(self.state.prefs.minimizeTabs ? .conceal(id) : .reveal(id))
-            }
-            try await self.execute(cmds)
-            self.engagedGroups.insert(group)
             var next = self.state
-            next.workspaces[wi].groups[gi] = g
+            var cmds: [WindowCommand] = []
+            if switching {
+                self.captureFloating(in: self.activeWorkspace, document: &next)
+                if self.state.prefs.switchMode == .concentrate {
+                    cmds += (self.activeWorkspace?.groups.flatMap(\.memberIDs) ?? []).filter(self.canSafelyMinimize).map(
+                        WindowCommand.conceal)
+                }
+                cmds += self.plannedCommands(for: ws.groups, peers: ws.groups, mode: .arrange, preferred: member)
+                next.recent.removeAll { $0 == ws.id }
+                next.recent.insert(ws.id, at: 0)
+            } else {
+                cmds.append(.reveal(member))
+                if let previous, previous.id != member { cmds.append(.place(member, previous.frame)) }
+                for id in pane.tabs where id != member && self.bindings[id] != nil {
+                    cmds.append(self.state.prefs.minimizeTabs && self.canSafelyMinimize(id) ? .conceal(id) : .reveal(id))
+                }
+                cmds.append(.raise(member))
+            }
+            next.workspaces[wi] = ws
             next.activeID = ws.id
-            self.commit(next)
+            try await self.execute(cmds) { try self.commit(next).get() }
+            if switching { self.engagedGroups = Set(ws.groups.map(\.id)) } else { self.engagedGroups.insert(group) }
         }
     }
     func stepTab(_ direction: Int) {
@@ -214,8 +287,7 @@ extension Workbench {
         }
     }
     func position(_ group: UUID, region: Int) {
-        change { $0.groupAreas[group] = relativeArea(region) }
-        apply(group)
+        if case .success = change({ $0.groupAreas[group] = relativeArea(region) }) { apply(group) }
     }
     func tile(_ member: UUID, region: Int) {
         guard let w = windows.first(where: { $0.id == member }),

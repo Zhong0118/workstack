@@ -86,8 +86,16 @@ struct WorkbenchSettings: View {
             }
             Button(tr("Restore defaults")) { reset = true }
         case .workspace:
-            Toggle(tr("Restore layouts on switch"), isOn: pref(\.switchLayouts))
-            Toggle(tr("Minimize previous workspace when recoverable"), isOn: pref(\.hidePrevious))
+            Picker(tr("When switching workspaces"), selection: pref(\.switchMode)) {
+                Text(tr("Focus")).tag(WorkspaceSwitchMode.focus)
+                Text(tr("Arrange")).tag(WorkspaceSwitchMode.arrange)
+                Text(tr("Concentrate")).tag(WorkspaceSwitchMode.concentrate)
+            }.pickerStyle(.segmented)
+            switch model.state.prefs.switchMode {
+            case .focus: Text(tr("Bring the workspace forward and keep window positions."))
+            case .arrange: Text(tr("Restore the workspace layout and focus its window."))
+            case .concentrate: Text(tr("Restore the layout and minimize recoverable windows in the previous workspace."))
+            }
         case .groups:
             Picker(tr("Tab bar position"), selection: pref(\.tabPosition)) {
                 Text(tr("Top")).tag("top"); Text(tr("Bottom")).tag("bottom")

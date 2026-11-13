@@ -3,6 +3,7 @@ import Foundation
 @MainActor
 public protocol WindowControl: AnyObject {
     func read(_ id: UUID) async throws -> LiveWindow
+    func orderFront(_ id: UUID) async throws
     func focus(_ id: UUID) async throws
     func setFrame(_ frame: CGRect, for id: UUID) async throws
     func setMinimized(_ flag: Bool, for id: UUID) async throws
@@ -12,10 +13,12 @@ public enum WindowCommand: Sendable {
     case place(UUID, CGRect)
     case conceal(UUID)
     case reveal(UUID)
+    case surface(UUID)
     case raise(UUID)
+    case restore(UUID, safeAreas: [CGRect])
     public var member: UUID {
         switch self {
-        case .place(let id, _), .conceal(let id), .reveal(let id), .raise(let id): id
+        case .place(let id, _), .conceal(let id), .reveal(let id), .surface(let id), .raise(let id), .restore(let id, _): id
         }
     }
 }
@@ -42,15 +45,28 @@ public final class WindowCoordinator {
         journal = next
     }
 
-    public func perform(_ commands: [WindowCommand], binding: [UUID: UUID], unique: Set<UUID>) async throws {
+    public func perform(
+        _ commands: [WindowCommand], binding: [UUID: UUID], unique: Set<UUID>, previousFocus: UUID? = nil,
+        commit: () throws -> Void = {}
+    ) async throws {
+        var attemptedFocus = false
         var before: [(member: UUID, live: LiveWindow, lease: WindowLease?, command: WindowCommand)] = []
         do {
             for command in commands {
                 lastAttempt = command
                 let member = command.member
-                guard let runtime = binding[member] else { continue }
+                if case .restore = command, journal.entries[member] == nil { continue }
+                guard let runtime = binding[member] else {
+                    if case .raise = command { throw ControlError.unavailable }
+                    continue
+                }
                 let live = try await controller.read(runtime)
-                guard live.kind == .normal, !live.fullscreen else { continue }
+                guard live.kind == .normal, !live.fullscreen else {
+                    switch command {
+                    case .raise, .restore: throw ControlError.unavailable
+                    default: continue
+                    }
+                }
                 let previous = journal.entries[member]
                 guard previous == nil || previous?.identity == live.identity else { throw ControlError.recoveryRequired }
                 var lease = previous ?? WindowLease(identity: live.identity)
@@ -80,13 +96,34 @@ public final class WindowCoordinator {
                     }
                     lease.minimizedByUs = false
                     try record(lease.originalFrame == nil ? nil : lease, for: member)
+                case .surface:
+                    if !live.minimized { try await controller.orderFront(runtime) }
                 case .raise:
-                    if !live.minimized { try await controller.focus(runtime) }
+                    guard !live.minimized else { throw ControlError.unavailable }
+                    attemptedFocus = true
+                    try await controller.focus(runtime)
+                case .restore(_, let areas):
+                    let frame = try restorationFrame(for: live, lease: lease, safeAreas: areas)
+                    before.append((member, live, previous, command))
+                    if live.minimized && lease.minimizedByUs {
+                        before.append((member, live, previous, .reveal(member)))
+                        try await controller.setMinimized(false, for: runtime)
+                    }
+                    if let frame {
+                        before.append((member, live, previous, .place(member, frame)))
+                        try await controller.setFrame(frame, for: runtime)
+                        guard try await controller.read(runtime).frame.roughlyEquals(frame, tolerance: 3) else {
+                            throw ControlError.unexpectedFrame
+                        }
+                    }
+                    try record(nil, for: member)
                 }
             }
+            try commit()
         } catch {
             // Undo only writes in this invocation. Keep durable recovery evidence on rollback failure.
-            for item in before.reversed() {
+            var rollbackFailures = Set<UUID>()
+            for item in before.reversed() where !rollbackFailures.contains(item.member) {
                 do {
                     let now = try await controller.read(item.live.id)
                     guard now.identity == item.live.identity, !now.fullscreen else { continue }
@@ -102,16 +139,25 @@ public final class WindowCoordinator {
                             abs(now.frame.width - size.width) <= 3 && abs(now.frame.height - size.height) <= 3
                         }
                         if !now.minimized, positionKnown, sizeKnown, !now.frame.roughlyEquals(original) {
+                            if item.lease?.expectedFrame?.roughlyEquals(original) == true {
+                                try record(item.lease, for: item.member)
+                            }
                             try await controller.setFrame(original, for: now.id)
                         }
                     case .conceal, .reveal:
                         if now.minimized != item.live.minimized {
+                            if item.live.minimized { try record(item.lease, for: item.member) }
                             try await controller.setMinimized(item.live.minimized, for: now.id)
                         }
-                    case .raise: break
+                    case .raise, .surface, .restore: break
                     }
                     try record(item.lease, for: item.member)
-                } catch { continue }
+                } catch { rollbackFailures.insert(item.member) }
+            }
+            if attemptedFocus, let previousFocus, let runtime = binding[previousFocus],
+                let live = try? await controller.read(runtime), live.kind == .normal, !live.fullscreen, !live.minimized
+            {
+                try? await controller.focus(runtime)
             }
             throw error
         }
@@ -125,10 +171,10 @@ public final class WindowCoordinator {
     }
 
     public func restore(_ member: UUID, runtime: UUID, safeAreas: [CGRect]) async throws {
-        guard let lease = journal.entries[member] else { return }
-        let live = try await controller.read(runtime)
-        guard live.identity == lease.identity, !live.fullscreen, live.kind == .normal else { throw ControlError.unavailable }
-        if live.minimized && lease.minimizedByUs { try await controller.setMinimized(false, for: runtime) }
+        try await perform([.restore(member, safeAreas: safeAreas)], binding: [member: runtime], unique: [])
+    }
+
+    private func restorationFrame(for live: LiveWindow, lease: WindowLease, safeAreas: [CGRect]) throws -> CGRect? {
         if (!live.minimized || lease.minimizedByUs), var original = lease.originalFrame,
             lease.expectedFrame?.roughlyEquals(live.frame, tolerance: 3) == true, live.resizable, live.movable
         {
@@ -143,9 +189,9 @@ public final class WindowCoordinator {
                     x: max(area.minX, min(original.minX, area.maxX - original.width)),
                     y: max(area.minY, min(original.minY, area.maxY - original.height)))
             }
-            try await controller.setFrame(original, for: runtime)
+            return original
         }
-        try record(nil, for: member)
+        return nil
     }
 }
 

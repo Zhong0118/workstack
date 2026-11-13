@@ -3,6 +3,10 @@ import Combine
 import MacWindows
 import WorkbenchCore
 
+private struct EditError: LocalizedError {
+    var errorDescription: String?
+}
+
 @MainActor
 final class Workbench: ObservableObject {
     @Published private(set) var state: WorkbenchState
@@ -10,8 +14,11 @@ final class Workbench: ObservableObject {
     @Published private(set) var displays: [DisplayArea] = []
     @Published private(set) var trusted = false
     @Published var busy = false
-    @Published var notice: String?
-    let backend = MacWindows()
+    @Published var noticeIsFailure = false
+    @Published var notice: String? {
+        didSet { noticeIsFailure = false }
+    }
+    let backend: MacWindows
     let coordinator: WindowCoordinator
     let directory: URL
     var bindings: [UUID: UUID] = [:]
@@ -33,7 +40,8 @@ final class Workbench: ObservableObject {
     var groupList: [WindowGroup] { state.workspaces.flatMap(\.groups) }
     var activeWorkspace: Workspace? { state.workspaces.first { $0.id == state.activeID } }
 
-    init(directory: URL? = nil) {
+    init(directory: URL? = nil, controller: (any WindowControl)? = nil) {
+        backend = MacWindows(allowedApplications: IntegrationCheck.isQA ? [] : nil)
         let folder =
             directory
             ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -68,13 +76,15 @@ final class Workbench: ObservableObject {
             notice = tr("Configuration could not be read. Your saved files have been preserved.")
         }
         state = config
-        coordinator = WindowCoordinator(controller: backend, journal: journal) { try LocalFile.write($0, to: journalPath) }
+        coordinator = WindowCoordinator(controller: controller ?? backend, journal: journal) {
+            try LocalFile.write($0, to: journalPath)
+        }
         if !journal.entries.isEmpty { notice = tr("A previous session has windows to restore. Review Recovery in Settings.") }
     }
 
     func start() {
         panelManager = TabPanels(model: self)
-        if ProcessInfo.processInfo.environment["WW_INTEGRATION_CHECK"] == nil {
+        if !IntegrationCheck.isQA {
             hotkey = GlobalShortcut { [weak self] action in
                 switch action {
                 case .switcher: self?.openSwitcher()
@@ -107,10 +117,11 @@ final class Workbench: ObservableObject {
     private func authorizeRecovery() {
         backend.authorizeRecovery(coordinator.journal.entries.values.filter(\.minimizedByUs).map(\.identity))
     }
-    func update(_ snapshot: [LiveWindow]) {
+    func update(_ snapshot: [LiveWindow], permission: Bool? = nil, screens: [DisplayArea]? = nil) {
         authorizeRecovery()
-        if trusted != backend.trusted { trusted = backend.trusted }
-        let nextDisplays = MacDisplay.all
+        let granted = permission ?? backend.trusted
+        if trusted != granted { trusted = granted }
+        let nextDisplays = screens ?? MacDisplay.all
         let displayChanged = !displays.isEmpty && displays != nextDisplays
         if displays != nextDisplays { displays = nextDisplays }
         raw = snapshot
@@ -202,8 +213,16 @@ final class Workbench: ObservableObject {
         }
         return nil
     }
-    func commit(_ proposed: WorkbenchState, remember: Bool = true) {
-        guard !readOnly, proposed != state else { return }
+    private func rejected(_ message: String) -> Result<Void, Error> {
+        notice = message
+        noticeIsFailure = true
+        return .failure(EditError(errorDescription: message))
+    }
+
+    @discardableResult
+    func commit(_ proposed: WorkbenchState, remember: Bool = true) -> Result<Void, Error> {
+        guard !readOnly else { return rejected(tr("Configuration could not be read. Your saved files have been preserved.")) }
+        guard proposed != state else { return .success(()) }
         var next = proposed
         if !next.workspaces.contains(where: { $0.id == next.activeID }) { next.activeID = next.workspaces.first?.id }
         next.recent.removeAll { !next.workspaces.map(\.id).contains($0) }
@@ -221,30 +240,33 @@ final class Workbench: ObservableObject {
             try next.validate()
             if shortcutsChanged, let hotkey, !hotkey.configure(next.prefs) {
                 _ = hotkey.configure(state.prefs)
-                notice = tr("Shortcut is already in use. Choose another in Settings.")
-                return
+                return rejected(tr("Shortcut is already in use. Choose another in Settings."))
             }
             try LocalFile.write(next, to: configURL)
         } catch {
             if shortcutsChanged { _ = hotkey?.configure(state.prefs) }
-            notice = tr("Changes could not be saved.")
-            return
+            return rejected(tr("Changes could not be saved."))
         }
         let previous = state
         if remember { history.append(previous); if history.count > 40 { history.removeFirst() } }
         state = next
         engagedGroups.formIntersection(groups)
         panelManager?.sync()
+        return .success(())
     }
-    func change(_ edit: (inout WorkbenchState) -> Void) {
-        guard !busy else { return }
+
+    @discardableResult
+    func change(_ edit: (inout WorkbenchState) -> Void) -> Result<Void, Error> {
+        guard !busy, !terminating else { return rejected(tr("Wait for the current operation to finish.")) }
         var next = state
         edit(&next)
         let removed = Set(state.memberIDs).subtracting(next.memberIDs)
-        commit(next)
-        if !removed.isEmpty && Set(state.memberIDs).isDisjoint(with: removed) {
-            run { try await self.restoreMembers(Array(removed)) }
+        let result = commit(next)
+        if case .success = result {
+            let leased = removed.filter { coordinator.journal.entries[$0] != nil && bindings[$0] != nil }
+            if !leased.isEmpty { run { try await self.restoreMembers(Array(leased)) } }
         }
+        return result
     }
     func modifyGroup(_ id: UUID, remember: Bool, _ edit: (inout WindowGroup) -> Void) {
         guard let (wi, gi) = indices(id, in: state) else { return }
@@ -259,8 +281,7 @@ final class Workbench: ObservableObject {
     }
     func addWorkspace(_ name: String) {
         let w = Workspace(name: name)
-        change { $0.workspaces.append(w) }
-        activate(w.id)
+        if case .success = change({ $0.workspaces.append(w) }) { activate(w.id) }
     }
     func addGroup(_ name: String, to workspace: UUID) {
         change { next in
@@ -327,7 +348,7 @@ final class Workbench: ObservableObject {
     func exclude(_ member: UUID, app: Bool) {
         guard let live = windows.first(where: { $0.id == member }) else { return }
         let ids = app ? windows.filter { $0.bundleID == live.bundleID }.map(\.id) : [member]
-        change { next in
+        let result = change { next in
             if app {
                 next.prefs.excludedApps.insert(live.bundleID)
             } else {
@@ -339,15 +360,18 @@ final class Workbench: ObservableObject {
                 }
             }
         }
-        refresh()
+        if case .success = result { refresh() }
     }
-    func rebind(_ member: UUID, to live: UUID) {
-        guard !busy, bindings[member] == nil, let runtime = bindings[live], !state.memberIDs.contains(live),
+
+    @discardableResult
+    func rebind(_ member: UUID, to live: UUID) -> Result<Void, Error> {
+        guard !busy else { return rejected(tr("Wait for the current operation to finish.")) }
+        guard state.memberIDs.contains(member), bindings[member] == nil, bindings[live] != nil, !state.memberIDs.contains(live),
             let w = windows.first(where: { $0.id == live }), w.bundleID == state.identities[member]?.bundleID,
-            coordinator.journal.entries[live] == nil
-        else { return }
+            w.kind == .normal, !w.fullscreen, coordinator.journal.entries[live] == nil
+        else { return rejected(tr("Unavailable window")) }
         // Rebinding assigns layout membership only. A new window must never inherit an old restoration lease.
-        change { next in
+        return change { next in
             for wi in next.workspaces.indices {
                 for gi in next.workspaces[wi].groups.indices {
                     var g = next.workspaces[wi].groups[gi]
@@ -365,30 +389,47 @@ final class Workbench: ObservableObject {
             }
             next.identities[live] = w.identity
         }
-        bindings[live] = runtime
     }
     func undo() {
-        guard canUndo, let previous = history.popLast() else { return }
+        guard canUndo, let previous = history.last else { return }
         let removed = Set(state.memberIDs).subtracting(previous.memberIDs)
         let departed = activeWorkspace
+        let target = previous.workspaces.first { $0.id == previous.activeID }
+        let switching = departed?.id != target?.id
+        let oldPanes = target?.groups.flatMap { $0.root?.panes ?? [] } ?? []
+        let currentPanes = departed?.groups.flatMap { $0.root?.panes ?? [] } ?? []
+        let preferred = oldPanes.first { pane in
+            currentPanes.contains { $0.id == pane.id && $0.active != pane.active }
+        }?.active
         run {
-            do {
-                try await self.restoreMembers(Array(removed))
-                let target = previous.workspaces.first { $0.id == previous.activeID }
-                let switching = departed?.id != target?.id
-                var cmds: [WindowCommand] = []
-                if switching && previous.prefs.hidePrevious, let departed {
-                    let staying = Set(target?.groups.flatMap(\.memberIDs) ?? [])
-                    cmds = departed.groups.flatMap(\.memberIDs).filter { !staying.contains($0) && !removed.contains($0) }.map(
-                        WindowCommand.conceal)
+            var cmds = removed.compactMap { id -> WindowCommand? in
+                guard self.bindings[id] != nil, self.coordinator.journal.entries[id] != nil else { return nil }
+                return .restore(id, safeAreas: self.displays.map(\.frame))
+            }
+            var appliedGroups: [WindowGroup] = []
+            if let target {
+                let layoutChanged =
+                    departed?.groups != target.groups || previous.groupAreas != self.state.groupAreas
+                    || previous.floatingFrames != self.state.floatingFrames || previous.prefs.gap != self.state.prefs.gap
+                if switching || layoutChanged {
+                    let mode = switching ? previous.prefs.switchMode : .arrange
+                    let planned = self.plannedCommands(
+                        for: target.groups, peers: target.groups, mode: mode,
+                        preferred: preferred, document: previous)
+                    if switching, mode == .concentrate, !planned.isEmpty, let departed {
+                        let staying = Set(target.groups.flatMap(\.memberIDs))
+                        cmds += departed.groups.flatMap(\.memberIDs).filter {
+                            !staying.contains($0) && !removed.contains($0) && self.canSafelyMinimize($0)
+                        }.map(WindowCommand.conceal)
+                    }
+                    cmds += planned
+                    appliedGroups = target.groups
                 }
-                if let target {
-                    cmds += target.groups.flatMap { self.commands($0, among: target.groups, raise: switching) }
-                }
-                try await self.execute(cmds)
-                self.engagedGroups = Set(target?.groups.map(\.id) ?? [])
-                self.commit(previous, remember: false)
-            } catch { self.history.append(previous); throw error }
+            }
+            try await self.execute(cmds) { try self.commit(previous, remember: false).get() }
+            self.history.removeLast()
+            if switching { self.engagedGroups.removeAll() }
+            self.engagedGroups.formUnion(appliedGroups.map(\.id))
         }
     }
 }

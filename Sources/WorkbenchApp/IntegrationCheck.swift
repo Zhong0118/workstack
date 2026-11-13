@@ -9,15 +9,51 @@ import WorkbenchCore
         init(_ description: String) { self.description = description }
     }
 
+    static var isQA: Bool {
+        Bundle.main.bundleIdentifier == "local.windowworkbench.qa"
+            || ProcessInfo.processInfo.environment["WW_INTEGRATION_CHECK"] != nil
+            || CommandLine.arguments.contains("--integration-check")
+    }
+
+    // Resolve the path before Workbench looks up either of its persistent files.
+    static let storageDirectory: URL? = {
+        guard isQA else { return nil }
+        let env = ProcessInfo.processInfo.environment
+        let fm = FileManager.default
+        func invalid() -> Never {
+            print("integration=failed reason=fresh_qa_bundle_and_directory_required")
+            exit(64)
+        }
+        guard Bundle.main.bundleIdentifier == "local.windowworkbench.qa",
+            CommandLine.arguments.contains("--integration-check"),
+            let path = env["WW_TEST_DIRECTORY"], let executable = env["WW_INTEGRATION_CHECK"]
+        else { invalid() }
+        let bundle = Bundle.main.bundleURL.resolvingSymlinksInPath()
+        let root = bundle.deletingLastPathComponent()
+        let state = root.appendingPathComponent("state", isDirectory: true)
+        let fixture = root.appendingPathComponent("Fixture.app/Contents/MacOS/window-probe")
+        guard root.deletingLastPathComponent().path == fm.temporaryDirectory.resolvingSymlinksInPath().path,
+            root.lastPathComponent.hasPrefix("ww-integration."), bundle.lastPathComponent == "Product.app",
+            (try? fm.attributesOfItem(atPath: root.path)[.posixPermissions] as? NSNumber)?.intValue == 0o700,
+            state.path == URL(fileURLWithPath: path).resolvingSymlinksInPath().path,
+            fixture.path == URL(fileURLWithPath: executable).resolvingSymlinksInPath().path,
+            (try? fm.contentsOfDirectory(atPath: state.path))?.isEmpty == true
+        else { invalid() }
+        return state
+    }()
+
     static func run(model: Workbench) async -> Int32 {
         let environment = ProcessInfo.processInfo.environment
         guard let path = environment["WW_INTEGRATION_CHECK"], path.hasPrefix("/"),
             let directory = environment["WW_TEST_DIRECTORY"],
-            URL(fileURLWithPath: directory).standardizedFileURL == model.directory.standardizedFileURL,
+            URL(fileURLWithPath: directory).resolvingSymlinksInPath().path == model.directory.path,
             model.groupList.isEmpty, model.state.prefs.rules.isEmpty, model.journalCount == 0
         else {
             print("integration=failed reason=isolated_test_directory_required")
             return 1
+        }
+        if environment["WW_MEASURE"] == "1" {
+            do { try await IntegrationTiming.idle() } catch { print("idle=failed \(error)"); return 1 }
         }
         guard model.backend.trusted else {
             print("integration=skipped reason=accessibility_permission")
@@ -36,11 +72,18 @@ import WorkbenchCore
             configuration.arguments = ["--fixture", "2"]
             let peer = bundle.deletingLastPathComponent().appendingPathComponent("Peer.app")
             for app in [bundle, peer] {
+                let name = app.deletingPathExtension().lastPathComponent
+                let expected = "local.windowworkbench.qa." + name
+                try require(Bundle(url: app)?.bundleIdentifier == expected, "fixture bundle ID")
                 let fixture = try await NSWorkspace.shared.openApplication(at: app, configuration: configuration)
+                try require(
+                    fixture.bundleURL?.resolvingSymlinksInPath().path == app.resolvingSymlinksInPath().path
+                        && fixture.bundleIdentifier == expected && fixture.launchDate != nil, "fixture process identity")
                 disposable.append(fixture)
             }
             try require(disposable[0].bundleIdentifier != disposable[1].bundleIdentifier, "separate app bundles required")
-            try await exercise(model, first: disposable[0].processIdentifier, second: disposable[1].processIdentifier)
+            model.backend.allowFixtures(disposable)
+            try await exercise(model, apps: disposable)
             print("integration=passed windows=4 apps=2 isolation=fixture_pids")
             return 0
         } catch {
@@ -59,11 +102,28 @@ import WorkbenchCore
         let deadline = clock.now.advanced(by: .seconds(14))
         while !condition() {
             guard clock.now < deadline else { throw Failure("timed out: " + detail) }
-            try await Task.sleep(for: .milliseconds(75))
+            try await Task.sleep(for: .milliseconds(10))
         }
     }
 
-    private static func exercise(_ model: Workbench, first firstPID: pid_t, second secondPID: pid_t) async throws {
+    /// Invoke the same SwiftUI Button through the QA panel's own AppKit accessibility tree.
+    private static func tabButton(_ id: UUID, in panel: NSPanel?) -> (any NSAccessibilityProtocol)? {
+        guard let root = panel?.contentView else { return nil }
+        let wanted = "workstack.tab." + id.uuidString
+        var queue: [Any] = [root]
+        var seen = Set<ObjectIdentifier>()
+        while let next = queue.popLast() {
+            guard let element = next as? any NSAccessibilityProtocol,
+                seen.insert(ObjectIdentifier(element)).inserted
+            else { continue }
+            if element.accessibilityIdentifier() == wanted && element.accessibilityRole() == .button { return element }
+            queue.append(contentsOf: element.accessibilityChildren() ?? [])
+        }
+        return nil
+    }
+
+    private static func exercise(_ model: Workbench, apps: [NSRunningApplication]) async throws {
+        let firstPID = apps[0].processIdentifier, secondPID = apps[1].processIdentifier
         let pids: Set<pid_t> = [firstPID, secondPID]
         func fixtures() -> [LiveWindow] { model.windows.filter { pids.contains($0.identity.pid) } }
         func settle(line: Int = #line) async throws {
@@ -161,6 +221,53 @@ import WorkbenchCore
         }
         print("integration_step=cross_app_split_tab_panel passed")
 
+        if ProcessInfo.processInfo.environment["WW_MEASURE"] == "1" {
+            try await IntegrationTiming.measure(
+                "tab", action: { model.selectTab($0.isMultiple(of: 2) ? tabB : tabA, group: group) },
+                complete: { !model.busy },
+                confirm: { index in
+                    let id = index.isMultiple(of: 2) ? tabB : tabA
+                    try require(
+                        model.notice == nil
+                            && model.groupList.first(where: { $0.id == group })?.root?.panes.first(
+                                where: { $0.tabs.contains(id) })?.active == id,
+                        "tab commit")
+                    try await wait("published tab focus") {
+                        fixtures().contains { $0.id == id && $0.focused } && visibleStrips().count == 1
+                    }
+                })
+            try await IntegrationTiming.measure(
+                "workspace", action: { model.activate($0.isMultiple(of: 2) ? second : ws) },
+                complete: { !model.busy },
+                confirm: { index in
+                    let other = index.isMultiple(of: 2)
+                    try require(model.notice == nil && model.state.activeID == (other ? second : ws), "workspace commit")
+                    let minimized: Set<UUID> = other ? [tabA, tabB, side] : [tabB, spare]
+                    try await wait("published workspace visibility and focus") {
+                        Set(fixtures().filter(\.minimized).map(\.id)) == minimized
+                            && fixtures().contains { $0.focused && !$0.minimized }
+                    }
+                })
+        }
+        // Workspace activation can focus the side pane. Select the tab to expose its strip again.
+        model.selectTab(tabA, group: group)
+        try await settle()
+        try await wait("accessible tab strip") { tabButton(tabB, in: visibleStrips().first) != nil }
+        guard let button = tabButton(tabB, in: visibleStrips().first) else { throw Failure("tab button missing") }
+        let press = ContinuousClock.now
+        try require(button.accessibilityPerformPress(), "tab button rejected accessibility press")
+        try await wait("button changed tab") { fixtures().contains { $0.id == tabB && $0.focused } }
+        print(String(format: "strip_press_to_published_focus_ms=%.1f", IntegrationTiming.ms(since: press)))
+        try await settle()
+        try await wait("tab published before undo") { fixtures().contains { $0.id == tabB && $0.focused } }
+        model.undo()
+        try await settle()
+        try await wait("undo restored external tab and focus") {
+            fixtures().contains { $0.id == tabA && $0.focused && !$0.minimized }
+                && fixtures().contains { $0.id == tabB && $0.minimized } && visibleStrips().count == 1
+        }
+        print("integration_step=tab_undo passed")
+
         model.activate(second)
         try await settle()
         try require(model.state.activeID == second, "switch command failed before committing workspace")
@@ -178,8 +285,23 @@ import WorkbenchCore
         try require(previousWorkspace.minimized, "undo left previous workspace visible despite hidePrevious")
         print("integration_step=workspace_undo passed")
 
+        for target in [second, ws, second, ws] {
+            model.activate(target)
+            try await settle()
+            try require(model.state.activeID == target, "repeat workspace commit")
+            let minimized: Set<UUID> = target == second ? [tabA, tabB, side] : [tabB, spare]
+            try await wait("repeat visibility") { Set(fixtures().filter(\.minimized).map(\.id)) == minimized }
+        }
+        model.change { state in state.workspaces.removeAll { $0.id == second } }
+        try await settle()
+        let released = try await actual(spare)
+        try require(
+            model.coordinator.journal.entries[spare] == nil && !released.minimized
+                && released.frame.roughlyEquals(right[1].frame), "deleted workspace retained its fixture")
+        print("integration_step=repeat_switch_and_delete passed")
+
         // An independent observer outlives model.finish(), which stops the app's backend.
-        let observer = MacWindows()
+        let observer = MacWindows(allowedApplications: apps)
         var observed = [LiveWindow]()
         observer.onChange = { observed = $0.filter { pids.contains($0.identity.pid) } }
         observer.start()

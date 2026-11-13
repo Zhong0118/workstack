@@ -20,6 +20,7 @@ import Testing
         guard let window = windows[id] else { throw ControlError.unavailable }
         return window
     }
+    func orderFront(_ id: UUID) async throws {}
     func focus(_ id: UUID) async throws { windows[id]?.focused = true }
     func setFrame(_ frame: CGRect, for id: UUID) async throws {
         if fail == id { throw ControlError.unavailable }
@@ -82,4 +83,41 @@ import Testing
     var state = WorkbenchState()
     state.version = 2
     #expect(throws: StorageError.self) { try state.validate() }
+}
+
+@Test @MainActor func finalFocusRejectsUserMinimizedOrUnavailableTargetsAndRollsBack() async throws {
+    let sys = FakeWindows(), a = sys.add(), minimized = sys.add(minimized: true), missing = UUID()
+    let coord = WindowCoordinator(controller: sys, journal: RecoveryJournal()) { _ in }
+    for target in [minimized, missing] {
+        await #expect(throws: ControlError.self) {
+            try await coord.perform([.conceal(a), .raise(target)], binding: [a: a, minimized: minimized], unique: [a, minimized])
+        }
+        #expect(sys.windows[a]?.minimized == false)
+        #expect(sys.windows[minimized]?.minimized == true)
+        #expect(coord.journal.entries.isEmpty)
+    }
+}
+
+@Test @MainActor func failedCommitRestoresManagedStateAndHonorsManualUnminimize() async throws {
+    let sys = FakeWindows(), alreadyVisible = sys.add(), managed = sys.add(), focused = sys.add()
+    let area = CGRect(x: 0, y: 0, width: 1200, height: 900)
+    var disk = RecoveryJournal()
+    let coord = WindowCoordinator(controller: sys, journal: disk) { disk = $0 }
+    let binding = [alreadyVisible: alreadyVisible, managed: managed, focused: focused]
+    try await coord.perform(
+        [.conceal(alreadyVisible), .place(managed, area), .conceal(managed)], binding: binding, unique: Set(binding.keys))
+    sys.windows[alreadyVisible]?.minimized = false
+    let saved = disk
+    await #expect(throws: StorageError.self) {
+        try await coord.perform(
+            [.reveal(alreadyVisible), .restore(managed, safeAreas: [area]), .raise(focused)],
+            binding: binding, unique: Set(binding.keys)
+        ) {
+            throw StorageError.invalidConfiguration
+        }
+    }
+    #expect(disk.entries == [managed: saved.entries[managed]!])
+    #expect(coord.journal == disk)
+    #expect(sys.windows[managed]?.minimized == true && sys.windows[managed]?.frame == area)
+    #expect(sys.windows[alreadyVisible]?.minimized == false)
 }

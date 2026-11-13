@@ -7,7 +7,7 @@ final class Lifecycle: NSObject, NSApplicationDelegate {
     var model: Workbench?
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
-        NSApp.activate(ignoringOtherApps: true)
+        if !IntegrationCheck.isQA { NSApp.activate(ignoringOtherApps: true) }
     }
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         guard let model else { return .terminateNow }
@@ -25,9 +25,7 @@ final class Lifecycle: NSObject, NSApplicationDelegate {
 @main
 struct WorkstackApp: App {
     @NSApplicationDelegateAdaptor(Lifecycle.self) var lifecycle
-    @StateObject private var model = Workbench(
-        directory: ProcessInfo.processInfo.environment["WW_INTEGRATION_CHECK"] == nil
-            ? nil : ProcessInfo.processInfo.environment["WW_TEST_DIRECTORY"].map { URL(fileURLWithPath: $0, isDirectory: true) })
+    @StateObject private var model = Workbench(directory: IntegrationCheck.storageDirectory)
     @Environment(\.openWindow) var openWindow
     @State private var started = false
     var body: some Scene {
@@ -45,7 +43,7 @@ struct WorkstackApp: App {
                         open(id: "switcher"); NSApp.activate(ignoringOtherApps: true)
                     }
                     model.start()
-                    if ProcessInfo.processInfo.environment["WW_INTEGRATION_CHECK"] != nil {
+                    if IntegrationCheck.isQA {
                         Task { exit(await IntegrationCheck.run(model: model)) }
                     }
                 }
@@ -69,14 +67,24 @@ struct WorkstackApp: App {
         }.windowStyle(.hiddenTitleBar).windowResizability(.contentSize)
             .defaultPosition(.center)
         MenuBarExtra(
-            isInserted: Binding(get: { model.state.prefs.menuBar }, set: { value in model.change { $0.prefs.menuBar = value } })
+            isInserted: Binding(
+                get: { !IntegrationCheck.isQA && model.state.prefs.menuBar },
+                set: { value in
+                    if !IntegrationCheck.isQA { model.change { $0.prefs.menuBar = value } }
+                })
         ) {
             Button(tr("Open dashboard")) {
                 openWindow(id: "dashboard"); NSApp.activate(ignoringOtherApps: true)
             }
             Button(tr("Quick Switcher")) { model.openSwitcher() }
             Divider()
-            ForEach(model.state.workspaces) { ws in Button(ws.name) { model.activate(ws.id) } }
+            ForEach(model.state.workspaces) { ws in
+                Button {
+                    model.activate(ws.id)
+                } label: {
+                    if ws.id == model.state.activeID { Label(ws.name, systemImage: "checkmark") } else { Text(ws.name) }
+                }
+            }
             Divider()
             SettingsLink { Text(tr("Settings")) }
             Button(tr("Quit workstack")) { NSApp.terminate(nil) }
@@ -109,7 +117,7 @@ private struct QuickSwitcher: View {
             Result(id: ws.id.uuidString, title: ws.name, symbol: "square.grid.2x2") { model.activate(ws.id) }
         }
         let groups = model.groupList.map { g in
-            Result(id: g.id.uuidString, title: g.name, symbol: "rectangle.3.group") { model.apply(g.id) }
+            Result(id: g.id.uuidString, title: g.name, symbol: "rectangle.3.group") { model.focusGroup(g.id) }
         }
         let windows = model.windows.map { w in
             Result(id: w.id.uuidString, title: model.displayName(w.id), symbol: "macwindow") { model.focus(w.id) }

@@ -20,6 +20,10 @@ public struct KeyChord: Codable, Equatable, Hashable, Sendable {
     }
 }
 
+public enum WorkspaceSwitchMode: String, CaseIterable, Sendable {
+    case focus, arrange, concentrate
+}
+
 public struct Preferences: Codable, Equatable, Sendable {
     // Retained in v1 exports for compatibility with existing installations.
     public var language = "zh-Hans"
@@ -31,6 +35,14 @@ public struct Preferences: Codable, Equatable, Sendable {
     public var compact = false
     public var switchLayouts = true
     public var hidePrevious = false
+    // Keep the v1 JSON keys so saved workspaces and exported configurations remain readable.
+    public var switchMode: WorkspaceSwitchMode {
+        get { hidePrevious ? .concentrate : (switchLayouts ? .arrange : .focus) }
+        set {
+            hidePrevious = newValue == .concentrate
+            switchLayouts = newValue != .focus
+        }
+    }
     public var tabPosition = "top"
     public var tabStyle: String?
     public var tabAutoHide = false

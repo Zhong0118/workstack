@@ -12,5 +12,6 @@ let package = Package(
         .target(name: "MacWindows", dependencies: ["WorkbenchCore"]),
         .executableTarget(name: "WindowProbe", dependencies: ["MacWindows", "WorkbenchCore"]),
         .executableTarget(name: "WorkbenchApp", dependencies: ["WorkbenchCore", "MacWindows"], resources: [.process("Resources")]),
+        .testTarget(name: "WorkbenchAppTests", dependencies: ["WorkbenchApp", "WorkbenchCore", "MacWindows"]),
         .testTarget(name: "WorkbenchCoreTests", dependencies: ["WorkbenchCore"]),
     ])

@@ -93,3 +93,11 @@
 "Displays" = "显示器";
 "Completed operations" = "已完成操作";
 "Failed operations" = "失败操作";
+"When switching workspaces" = "工作区切换模式";
+"Focus" = "聚焦";
+"Arrange" = "排列";
+"Concentrate" = "专注";
+"Bring the workspace forward and keep window positions." = "聚焦目标工作区的窗口，保留现有位置。";
+"Restore the workspace layout and focus its window." = "恢复目标工作区的布局并聚焦窗口。";
+"Restore the layout and minimize recoverable windows in the previous workspace." = "恢复目标布局，并将上一工作区中可安全恢复的窗口最小化。";
+"Wait for the current operation to finish." = "请等待当前操作完成。";

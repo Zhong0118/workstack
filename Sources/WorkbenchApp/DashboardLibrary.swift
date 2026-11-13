@@ -11,72 +11,66 @@ extension Dashboard {
                     viewPicker
                     Button(action: addWorkspace) { Label(d("New workspace"), systemImage: "plus") }
                 }
-                if !grid {
-                    ForEach(workspaces) { w in
-                        HStack(spacing: 9) {
-                            if let g = w.groups.first {
-                                DeskPreview(group: g).frame(width: 65, height: 38)
-                            } else {
-                                Image(systemName: "rectangle.stack").frame(width: 65, height: 38).foregroundStyle(.secondary)
-                            }
-                            VStack(alignment: .leading) {
-                                Text(w.name).fontWeight(.medium)
-                                Text(deskCount(w.groups.count, "group", "groups")).font(.caption).foregroundStyle(.secondary)
-                            }
-                            Spacer()
-                            iconButton("Edit layout", "chevron.right") { openSpaceEditor(w) }
-                        }.padding(7)
-                            .background(w.id == selectedSpace ? Color.accentColor.opacity(0.09) : .clear)
-                            .overlay {
-                                DeskCardClick(select: { selectedSpace = w.id }, open: { openSpaceEditor(w) }).padding(.trailing, 37)
-                            }
-                            .contextMenu { workspaceMenu(w) }
-                        Divider()
+                if grid {
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 182, maximum: 340), spacing: 14)], spacing: 14) {
+                        ForEach(workspaces) { w in workspaceCard(w) }
                     }
                 } else {
-                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 177, maximum: 340), spacing: 14)], spacing: 14) {
-                        ForEach(workspaces) { w in
-                            VStack(alignment: .leading, spacing: 0) {
-                                if w.groups.isEmpty {
-                                    Image(systemName: "rectangle.stack").font(.system(size: 25, weight: .light))
-                                        .foregroundStyle(.tertiary).frame(maxWidth: .infinity).frame(height: 95)
-                                } else {
-                                    HStack(spacing: 2) {
-                                        ForEach(Array(w.groups.prefix(3))) { g in DeskPreview(group: g) }
-                                    }.frame(height: 95)
-                                }
-                                Divider()
-                                HStack(spacing: 5) {
-                                    VStack(alignment: .leading, spacing: 4) {
-                                        Text(w.name).font(.headline).lineLimit(1)
-                                        Text(deskCount(w.groups.count, "group", "groups")).font(.caption).foregroundStyle(
-                                            .secondary)
-                                    }
-                                    Spacer()
-                                    Menu {
-                                        workspaceMenu(w)
-                                    } label: {
-                                        Image(systemName: "ellipsis")
-                                    }
-                                    .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
-                                }.padding(11)
-                            }
-                            .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 9))
-                            .clipShape(RoundedRectangle(cornerRadius: 9))
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 9).strokeBorder(
-                                    selectedSpace == w.id ? Color.accentColor : Color.secondary.opacity(0.2))
-                            )
-                            .overlay {
-                                DeskCardClick(select: { selectedSpace = w.id }, open: { openSpaceEditor(w) }).padding(.trailing, 37)
-                            }
-                            .contextMenu { workspaceMenu(w) }
-                            .accessibilityAction { openSpaceEditor(w) }
-                        }
+                    ForEach(workspaces) { w in
+                        workspaceCard(w); Divider()
                     }
                 }
             }.padding(22).frame(maxWidth: .infinity, alignment: .leading)
         }
+    }
+    func workspaceCard(_ w: Workspace) -> some View {
+        let active = model.state.activeID == w.id
+        return VStack(alignment: .leading, spacing: 0) {
+            Button {
+                activateWorkspace(w.id)
+            } label: {
+                VStack(alignment: .leading, spacing: 7) {
+                    if grid {
+                        if w.groups.isEmpty {
+                            Image(systemName: "rectangle.stack").font(.title).foregroundStyle(.secondary)
+                                .frame(maxWidth: .infinity).frame(height: small ? 60 : 85)
+                        } else {
+                            HStack(spacing: 2) { ForEach(Array(w.groups.prefix(3))) { g in DeskPreview(group: g) } }
+                                .frame(height: small ? 60 : 85)
+                        }
+                    }
+                    HStack {
+                        Text(w.name).font(.headline).lineLimit(1)
+                        Spacer()
+                        if active { Image(systemName: "checkmark.circle.fill").foregroundStyle(.blue).help(d("Active workspace")) }
+                    }
+                    Text(workspaceDetail(w)).font(.caption).foregroundStyle(.secondary)
+                }.frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
+            }.buttonStyle(.plain).disabled(model.busy)
+                .accessibilityHint(d("Activate workspace"))
+                .accessibilityValue(active ? d("Active workspace") : "")
+            HStack {
+                Button(d("Edit layout")) { openSpaceEditor(w) }.controlSize(.small)
+                Spacer()
+                Menu {
+                    workspaceMenu(w)
+                } label: {
+                    Image(systemName: "ellipsis")
+                }
+                .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().accessibilityLabel(d("Workspace actions"))
+            }.padding(.top, 8)
+        }.padding(small ? 8 : 11)
+            .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 9))
+            .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(active ? Color.accentColor : Color.secondary.opacity(0.2)))
+            .contextMenu { workspaceMenu(w) }
+    }
+    func workspaceDetail(_ w: Workspace) -> String {
+        var parts = [
+            deskCount(w.groups.count, "group", "groups"), deskCount(w.groups.flatMap(\.memberIDs).count, "window", "windows"),
+        ]
+        let missing = model.missingCount(in: w)
+        if missing > 0 { parts.append(deskCount(missing, "missing", "missing")) }
+        return parts.joined(separator: "  ·  ")
     }
     var viewPicker: some View {
         Picker(d("View"), selection: $grid) {
@@ -95,15 +89,13 @@ extension Dashboard {
                     HStack(alignment: .center) {
                         VStack(alignment: .leading, spacing: 5) {
                             Text(w.name).font(.system(size: 28, weight: .semibold)).lineLimit(2)
-                            Text(
-                                deskCount(w.groups.count, "group", "groups") + "  ·  "
-                                    + deskCount(w.groups.flatMap(\.memberIDs).count, "window", "windows")
-                            )
-                            .font(.subheadline).foregroundStyle(.secondary)
+                            Text(workspaceDetail(w)).font(.subheadline).foregroundStyle(.secondary)
                         }
                         Spacer()
-                        if model.state.activeID != w.id {
-                            Button(d("Activate workspace")) { model.activate(w.id) }
+                        if model.state.activeID == w.id {
+                            Label(d("Active workspace"), systemImage: "checkmark.circle.fill").font(.callout).foregroundStyle(.blue)
+                        } else {
+                            Button(d("Activate workspace")) { activateWorkspace(w.id) }.disabled(model.busy)
                         }
                         Menu {
                             workspaceMenu(w)
@@ -132,22 +124,7 @@ extension Dashboard {
                     } else {
                         VStack(spacing: 0) {
                             ForEach(w.groups) { g in
-                                HStack {
-                                    DeskPreview(group: g).frame(width: 61, height: 39)
-                                    VStack(alignment: .leading) {
-                                        Text(g.name).fontWeight(.medium)
-                                        Text(groupDetail(g)).font(.caption).foregroundStyle(.secondary)
-                                    }
-                                    Spacer()
-                                    iconButton("Edit layout", "chevron.right") { selectGroup(g, edit: true) }
-                                }
-                                .padding(8).contentShape(Rectangle())
-                                .background(g.id == selectedGroup ? Color.accentColor.opacity(0.09) : .clear)
-                                .overlay {
-                                    DeskCardClick(select: { selectGroup(g) }, open: { selectGroup(g, edit: true) }).padding(
-                                        .trailing, 37)
-                                }
-                                .contextMenu { groupMenu(g) }
+                                groupCard(g)
                                 Divider()
                             }
                         }
@@ -218,32 +195,33 @@ extension Dashboard {
     }
     func groupCard(_ g: DeskGroup) -> some View {
         VStack(alignment: .leading, spacing: 0) {
-            DeskPreview(group: g).frame(height: small ? 82 : 111)
-            Divider()
-            HStack(spacing: 4) {
-                VStack(alignment: .leading, spacing: 4) {
+            Button {
+                focusGroup(g)
+            } label: {
+                VStack(alignment: .leading, spacing: 5) {
+                    if grid { DeskPreview(group: g).frame(height: small ? 70 : 95) }
                     Text(g.name).font(.headline).lineLimit(1)
                     Text(groupDetail(g)).font(.caption).foregroundStyle(.secondary)
-                }
-                Spacer(minLength: 0)
+                }.frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
+            }.buttonStyle(.plain).disabled(model.busy || g.memberIDs.isEmpty).accessibilityHint(d("Focus group"))
+            HStack {
+                Button(d("Edit layout")) { selectGroup(g, edit: true) }
+                Button(d("Apply layout")) { model.apply(g.id) }.disabled(model.busy || g.memberIDs.isEmpty)
+                Spacer(minLength: 1)
                 Menu {
                     groupMenu(g)
                 } label: {
                     Image(systemName: "ellipsis")
                 }
                 .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().accessibilityLabel(d("Group actions"))
-            }.padding(11)
-        }
-        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 10))
-        .clipShape(RoundedRectangle(cornerRadius: 10))
-        .overlay(
-            RoundedRectangle(cornerRadius: 10).strokeBorder(
-                selectedGroup == g.id ? Color.accentColor : Color.secondary.opacity(0.19), lineWidth: selectedGroup == g.id ? 2 : 1)
-        )
-        .contentShape(Rectangle())
-        .overlay { DeskCardClick(select: { selectGroup(g) }, open: { selectGroup(g, edit: true) }).padding(.trailing, 37) }
-        .accessibilityAction { selectGroup(g, edit: true) }
-        .contextMenu { groupMenu(g) }
+            }.controlSize(.small).padding(.top, 8)
+        }.padding(small ? 8 : 11)
+            .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 9))
+            .overlay(
+                RoundedRectangle(cornerRadius: 9).strokeBorder(
+                    selectedGroup == g.id ? Color.accentColor : Color.secondary.opacity(0.2))
+            )
+            .contextMenu { groupMenu(g) }
     }
     var windowsView: some View {
         ScrollView {
@@ -313,7 +291,7 @@ extension Dashboard {
                 }
                 ForEach(recent) { w in
                     resultRow(w.name, symbol: "rectangle.stack", detail: deskCount(w.groups.count, "group", "groups")) {
-                        navigate(.workspace(w.id)); model.activate(w.id)
+                        activateWorkspace(w.id)
                     }
                 }
             }.padding(22).frame(maxWidth: .infinity, alignment: .leading)
@@ -327,10 +305,12 @@ extension Dashboard {
             VStack(alignment: .leading, spacing: 11) {
                 Text(d("Search results")).font(.title.bold()).padding(.bottom, 7)
                 if !ws.isEmpty { Text(d("Workspaces")).font(.headline).foregroundStyle(.secondary) }
-                ForEach(ws) { w in resultRow(w.name, symbol: "rectangle.stack", detail: "") { navigate(.workspace(w.id)) } }
+                ForEach(ws) { w in
+                    resultRow(w.name, symbol: "rectangle.stack", detail: workspaceDetail(w)) { activateWorkspace(w.id) }
+                }
                 if !gs.isEmpty { Text(d("Window groups")).font(.headline).foregroundStyle(.secondary) }
                 ForEach(gs) { g in
-                    resultRow(g.name, symbol: "rectangle.3.group", detail: groupDetail(g)) { selectGroup(g, edit: true) }
+                    resultRow(g.name, symbol: "rectangle.3.group", detail: groupDetail(g)) { focusGroup(g) }
                 }
                 if !wins.isEmpty { Text(d("Windows")).font(.headline).foregroundStyle(.secondary) }
                 ForEach(wins) { w in
@@ -394,32 +374,5 @@ struct DeskPreview: View {
                 }
             }
         }.background(Color(nsColor: .windowBackgroundColor)).accessibilityHidden(true)
-    }
-}
-
-private struct DeskCardClick: NSViewRepresentable {
-    let select: () -> Void
-    let open: () -> Void
-
-    func makeNSView(context: Context) -> Surface { Surface() }
-    func updateNSView(_ view: Surface, context: Context) {
-        view.select = select
-        view.open = open
-    }
-    final class Surface: NSView {
-        var select: (() -> Void)?
-        var open: (() -> Void)?
-        override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
-        override func mouseDown(with event: NSEvent) {
-            if event.clickCount >= 2 { open?() } else { select?() }
-        }
-        override func hitTest(_ point: NSPoint) -> NSView? {
-            if let event = NSApp.currentEvent,
-                event.type == .rightMouseDown || event.type == .rightMouseUp || event.modifierFlags.contains(.control)
-            {
-                return nil
-            }
-            return super.hitTest(point)
-        }
     }
 }

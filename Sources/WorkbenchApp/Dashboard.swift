@@ -29,7 +29,6 @@ struct Dashboard: View {
     @EnvironmentObject var model: Workbench
     @Environment(\.accessibilityReduceMotion) var reduceMotion
     @State var page: DeskPage?
-    @State var selectedSpace: UUID?
     @State var selectedGroup: UUID?
     @State var editor: UUID?
     @State var member: UUID?
@@ -119,12 +118,21 @@ struct Dashboard: View {
     }
     func navigate(_ dest: DeskPage) {
         page = dest
-        selectedSpace = nil
         editor = nil
         selectedGroup = nil
         member = nil
         pane = nil
         search = ""
+    }
+    func activateWorkspace(_ id: UUID) {
+        guard !model.busy else { return }
+        model.activate(id)
+        if model.state.activeID == id { navigate(.workspace(id)) }
+    }
+    func focusGroup(_ g: DeskGroup) {
+        guard !model.busy else { return }
+        selectGroup(g)
+        model.focusGroup(g.id)
     }
     func selectGroup(_ g: DeskGroup, edit: Bool = false) {
         if let w = workspaces.first(where: { $0.groups.contains(where: { $0.id == g.id }) }) { page = .workspace(w.id) }
@@ -205,7 +213,7 @@ struct Dashboard: View {
     }
     func sideItem(_ name: String, _ symbol: String, _ dest: DeskPage, active: Bool = false) -> some View {
         Button {
-            navigate(dest)
+            if case let .workspace(id) = dest { activateWorkspace(id) } else { navigate(dest) }
         } label: {
             HStack(spacing: 9) {
                 Image(systemName: symbol).frame(width: 19)
@@ -246,7 +254,8 @@ struct Dashboard: View {
             .buttonStyle(.borderless).foregroundStyle(.secondary).help(d(name)).accessibilityLabel(d(name))
     }
     @ViewBuilder func workspaceMenu(_ w: Workspace) -> some View {
-        Button(d("Activate workspace")) { model.activate(w.id) }
+        Button(d("Activate workspace")) { activateWorkspace(w.id) }.disabled(model.busy)
+        Button(d("Edit layout")) { openSpaceEditor(w) }
         Button(d("New window group")) { addGroup(w.id) }
         Divider()
         Button(d("Rename")) {
@@ -271,7 +280,8 @@ struct Dashboard: View {
     }
     @ViewBuilder func groupMenu(_ g: DeskGroup) -> some View {
         Button(d("Edit layout")) { selectGroup(g, edit: true) }
-        Button(d("Apply layout")) { model.apply(g.id) }
+        Button(d("Focus group")) { focusGroup(g) }.disabled(g.memberIDs.isEmpty || model.busy)
+        Button(d("Apply layout")) { model.apply(g.id) }.disabled(g.memberIDs.isEmpty || model.busy)
         Button(d("Add windows")) { picker = DeskPickerRequest(group: g.id) }
         Divider()
         Button(d("Rename")) {

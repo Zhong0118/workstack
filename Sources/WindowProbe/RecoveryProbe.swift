@@ -4,16 +4,22 @@ import WorkbenchCore
 
 @MainActor enum RecoveryProbe {
     static func run(_ url: URL) async throws {
-        guard let bundle = Bundle(url: url), bundle.bundleIdentifier == "local.windowworkbench.integration-fixture",
+        guard let bundle = Bundle(url: url),
+            ["local.windowworkbench.integration-fixture", "local.windowworkbench.qa.Fixture"].contains(
+                bundle.bundleIdentifier ?? ""),
             bundle.executableURL?.lastPathComponent == "window-probe"
         else { throw WindowAccessError.unsupported }
         let config = NSWorkspace.OpenConfiguration()
         config.createsNewApplicationInstance = true
+        config.activates = false
         config.arguments = ["--fixture", "2"]
         let fixture = try await NSWorkspace.shared.openApplication(at: url, configuration: config)
+        guard fixture.bundleURL?.resolvingSymlinksInPath() == url.resolvingSymlinksInPath(),
+            fixture.bundleIdentifier == bundle.bundleIdentifier, fixture.launchDate != nil
+        else { throw WindowAccessError.unavailable }
         defer { fixture.terminate() }
         var first: [LiveWindow] = []
-        let original = MacWindows()
+        let original = MacWindows(allowedApplications: [fixture])
         original.onChange = { first = $0.filter { $0.identity.pid == fixture.processIdentifier } }
         original.start()
         defer { original.stop() }
@@ -31,7 +37,7 @@ import WorkbenchCore
         else { throw WindowAccessError.verification }
         original.stop()
         let persisted = try LocalFile.read(RecoveryJournal.self, from: journal)
-        let fresh = MacWindows()
+        let fresh = MacWindows(allowedApplications: [fixture])
         var second: [LiveWindow] = []
         fresh.onChange = { second = $0.filter { $0.identity.pid == fixture.processIdentifier } }
         fresh.authorizeRecovery(persisted.entries.values.filter(\.minimizedByUs).map(\.identity))

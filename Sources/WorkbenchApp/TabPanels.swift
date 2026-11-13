@@ -109,7 +109,9 @@ private struct TabStrip: View {
                                 .background(
                                     RoundedRectangle(cornerRadius: 5).fill(
                                         id == pane.active ? Color.accentColor.opacity(0.21) : .clear))
-                            }.buttonStyle(.plain).disabled(model.busy)
+                            }.buttonStyle(.plain).disabled(model.busy || model.bindings[id] == nil)
+                                .accessibilityIdentifier("workstack.tab.\(id.uuidString)")
+                                .accessibilityAddTraits(id == pane.active ? .isSelected : [])
                                 .onDrag { DeskPayload.window(id).provider }
                                 .dropDestination(for: String.self) { values, _ in
                                     guard let first = values.first, let member = UUID(uuidString: first) else { return false }

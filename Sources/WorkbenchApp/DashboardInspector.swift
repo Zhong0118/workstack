@@ -4,7 +4,6 @@ import WorkbenchCore
 extension Dashboard {
     var inspectedWorkspace: Workspace? {
         if case .workspace = page { return workspace }
-        if page == .spaces { return workspaces.first(where: { $0.id == selectedSpace }) }
         return nil
     }
     var inspectorPanel: some View {
@@ -29,7 +28,7 @@ extension Dashboard {
                         if model.state.activeID == w.id {
                             Label(d("Active workspace"), systemImage: "checkmark.circle").foregroundStyle(.blue)
                         } else {
-                            Button(d("Activate workspace")) { model.activate(w.id) }
+                            Button(d("Activate workspace")) { activateWorkspace(w.id) }.disabled(model.busy)
                         }
                         Divider()
                         Button {
@@ -101,12 +100,13 @@ extension Dashboard {
                 Label(d("Edit layout"), systemImage: "slider.horizontal.3")
             }
         }
+        Button(d("Focus group")) { focusGroup(g) }.disabled(g.memberIDs.isEmpty || model.busy)
         Button {
             model.apply(g.id)
         } label: {
             Label(d("Apply layout"), systemImage: "rectangle.on.rectangle")
         }
-        .disabled(!model.trusted || g.memberIDs.isEmpty)
+        .disabled(!model.trusted || g.memberIDs.isEmpty || model.busy)
         if !g.memberIDs.isEmpty {
             Divider()
             Text(d("Members")).font(.headline)

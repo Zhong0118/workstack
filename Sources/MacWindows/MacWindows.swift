@@ -20,7 +20,25 @@ import WorkbenchCore
     private var sleeping: Bool { !suspensions.isEmpty }
     private var running = false
     private var lastFrontmost: pid_t?
-    public init() {}
+    private var allowedApplications: [NSRunningApplication]?
+
+    public init(allowedApplications: [NSRunningApplication]? = nil) {
+        self.allowedApplications = allowedApplications
+    }
+
+    /// A fixture session starts with an empty allowlist. Bind it to its freshly launched processes once.
+    public func allowFixtures(_ applications: [NSRunningApplication]) {
+        guard allowedApplications?.isEmpty == true else { return }
+        allowedApplications = applications
+        refresh()
+    }
+
+    private func isAllowed(_ app: NSRunningApplication) -> Bool {
+        allowedApplications?.contains {
+            !$0.isTerminated && $0.processIdentifier == app.processIdentifier
+                && $0.launchDate != nil && $0.launchDate == app.launchDate
+        } ?? true
+    }
 
     public func requestPermission() {
         let options = ["AXTrustedCheckOptionPrompt": true] as CFDictionary
@@ -153,7 +171,7 @@ import WorkbenchCore
 
     private func eligible(_ app: NSRunningApplication) -> Bool {
         app.processIdentifier > 0 && app.processIdentifier != ProcessInfo.processInfo.processIdentifier
-            && app.activationPolicy != .prohibited && !app.isTerminated
+            && isAllowed(app) && app.activationPolicy != .prohibited && !app.isTerminated
     }
 
     private func discover(_ app: NSRunningApplication) {
@@ -237,7 +255,7 @@ import WorkbenchCore
         guard running, !sleeping,
             NSWorkspace.shared.frontmostApplication?.bundleIdentifier != "com.apple.loginwindow",
             let pid = owners[id], let worker = workers[pid],
-            let app = NSRunningApplication(processIdentifier: pid), !app.isTerminated, !app.isHidden,
+            let app = NSRunningApplication(processIdentifier: pid), !app.isTerminated, !app.isHidden, isAllowed(app),
             app.launchDate == worker.info.launched
         else { throw WindowAccessError.unavailable }
         return worker
@@ -262,6 +280,12 @@ import WorkbenchCore
         let worker = try worker(id)
         defer { schedule(worker.info.pid) }
         try await worker.perform { try $0.minimize(id, flag: flag) }
+    }
+
+    public func orderFront(_ id: UUID) async throws {
+        let worker = try worker(id)
+        defer { schedule(worker.info.pid) }
+        try await worker.perform { try $0.orderFront(id) }
     }
 
     public func focus(_ id: UUID) async throws {
