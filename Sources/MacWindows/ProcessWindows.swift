@@ -42,7 +42,7 @@ final class ProcessWindows: @unchecked Sendable {
 
     init(_ info: ApplicationInfo) {
         self.info = info
-        queue = DispatchQueue(label: "WindowWorkbench.AX.\(info.pid)", qos: .userInitiated)
+        queue = DispatchQueue(label: "workstack.AX.\(info.pid)", qos: .userInitiated)
         app = Element(raw: AXUIElementCreateApplication(info.pid))
     }
 
@@ -303,5 +303,5 @@ final class ProcessWindows: @unchecked Sendable {
 }
 
 extension Notification.Name {
-    static let workbenchAXEvent = Notification.Name("WindowWorkbench.remoteWindowEvent")
+    static let workbenchAXEvent = Notification.Name("workstack.remoteWindowEvent")
 }

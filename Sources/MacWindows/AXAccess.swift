@@ -6,13 +6,13 @@ public enum WindowAccessError: Error, LocalizedError {
 
     public var errorDescription: String? {
         switch self {
-        case .permission: "Accessibility permission is required."
-        case .unavailable: "The window or its application is no longer available."
-        case .busy: "The application is not responding. Try again shortly."
-        case .unsupported: "This window does not support the requested operation."
-        case .invalidFrame: "The target frame is invalid."
-        case .verification: "The application did not confirm the requested window state."
-        case .system(let error): "Accessibility returned error \(error.rawValue)."
+        case .permission: "需要辅助功能权限。"
+        case .unavailable: "窗口或其所属应用已不可用。"
+        case .busy: "应用暂时无响应，请稍后再试。"
+        case .unsupported: "此窗口不支持该操作。"
+        case .invalidFrame: "目标窗口的位置或尺寸无效。"
+        case .verification: "应用未确认窗口已切换到请求的状态。"
+        case .system(let error): "辅助功能返回错误（\(error.rawValue)）。"
         }
     }
 }

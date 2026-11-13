@@ -16,7 +16,7 @@ cat > "$scratch/Fixture.app/Contents/Info.plist" <<'PLIST'
 <plist version="1.0"><dict>
 <key>CFBundleExecutable</key><string>window-probe</string>
 <key>CFBundleIdentifier</key><string>local.windowworkbench.integration-fixture</string>
-<key>CFBundleName</key><string>Workbench Fixture</string>
+<key>CFBundleName</key><string>workstack 测试应用</string>
 <key>CFBundlePackageType</key><string>APPL</string>
 </dict></plist>
 PLIST
@@ -26,5 +26,5 @@ codesign --force --sign - "$scratch/Fixture.app"
 codesign --force --sign - "$scratch/Peer.app"
 export WW_TEST_DIRECTORY="$scratch/state"
 export WW_INTEGRATION_CHECK="$scratch/Fixture.app/Contents/MacOS/window-probe"
-dist/WindowWorkbench.app/Contents/MacOS/WindowWorkbench
+dist/workstack.app/Contents/MacOS/workstack
 "$bin/window-probe" --recovery-smoke "$scratch/Fixture.app"

@@ -80,9 +80,6 @@ struct WorkbenchSettings: View {
                         } catch { status = tr("Check Login Items in System Settings.") }
                     }))
             Toggle(tr("Show menu bar item"), isOn: pref(\.menuBar))
-            Picker(tr("Language"), selection: pref(\.language)) {
-                Text(tr("System")).tag("system"); Text(verbatim: "English").tag("en"); Text(verbatim: "简体中文").tag("zh-Hans")
-            }
             HStack {
                 Button(tr("Export configuration")) { transfer(export: true) }
                 Button(tr("Import configuration")) { transfer(export: false) }
@@ -110,7 +107,7 @@ struct WorkbenchSettings: View {
             } minimumValueLabel: {
                 Text("0")
             } maximumValueLabel: {
-                Text("\(Int(model.state.prefs.gap)) pt")
+                Text("\(Int(model.state.prefs.gap)) 点")
             }
             Toggle(tr("Snap dividers to common ratios"), isOn: pref(\.snapRatios))
             LabeledContent(tr("Saved layouts"), value: "\(model.state.templates.count)")
@@ -182,7 +179,7 @@ struct WorkbenchSettings: View {
                     }))
             Text(tr("Window titles stay on this Mac. Previews are requested only when opened.")).font(.caption)
         case .about:
-            LabeledContent("WindowWorkbench", value: "0.1.0")
+            LabeledContent("workstack", value: "0.1.0")
             Text(tr("Native window workspaces for macOS"))
             Text(tr("Built with Apple system frameworks. No third-party runtime dependencies."))
         }
@@ -236,7 +233,7 @@ struct WorkbenchSettings: View {
             if export {
                 let panel = NSSavePanel()
                 panel.allowedContentTypes = [.json]
-                panel.nameFieldStringValue = "WindowWorkbench.json"
+                panel.nameFieldStringValue = "workstack.json"
                 guard panel.runModal() == .OK, let url = panel.url else { return }
                 try LocalFile.write(model.state, to: url)
             } else {

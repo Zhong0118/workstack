@@ -2,9 +2,9 @@
 import PackageDescription
 
 let package = Package(
-    name: "WindowWorkbench", defaultLocalization: "en", platforms: [.macOS(.v14)],
+    name: "workstack", defaultLocalization: "zh-Hans", platforms: [.macOS(.v14)],
     products: [
-        .executable(name: "WindowWorkbench", targets: ["WorkbenchApp"]),
+        .executable(name: "workstack", targets: ["WorkbenchApp"]),
         .executable(name: "window-probe", targets: ["WindowProbe"]),
     ],
     targets: [

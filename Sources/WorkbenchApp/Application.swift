@@ -23,7 +23,7 @@ final class Lifecycle: NSObject, NSApplicationDelegate {
 }
 
 @main
-struct WindowWorkbenchApp: App {
+struct WorkstackApp: App {
     @NSApplicationDelegateAdaptor(Lifecycle.self) var lifecycle
     @StateObject private var model = Workbench(
         directory: ProcessInfo.processInfo.environment["WW_INTEGRATION_CHECK"] == nil
@@ -31,7 +31,7 @@ struct WindowWorkbenchApp: App {
     @Environment(\.openWindow) var openWindow
     @State private var started = false
     var body: some Scene {
-        Window("WindowWorkbench", id: "dashboard") {
+        Window("workstack", id: "dashboard") {
             Dashboard().environmentObject(model).modifier(Appearance(model: model))
                 .onAppear {
                     guard !started else { return }
@@ -79,9 +79,9 @@ struct WindowWorkbenchApp: App {
             ForEach(model.state.workspaces) { ws in Button(ws.name) { model.activate(ws.id) } }
             Divider()
             SettingsLink { Text(tr("Settings")) }
-            Button(tr("Quit WindowWorkbench")) { NSApp.terminate(nil) }
+            Button(tr("Quit workstack")) { NSApp.terminate(nil) }
         } label: {
-            Label("WindowWorkbench", systemImage: "rectangle.3.group")
+            Label("workstack", systemImage: "rectangle.3.group")
         }
 
     }
@@ -91,10 +91,7 @@ private struct Appearance: ViewModifier {
     @ObservedObject var model: Workbench
     func body(content: Content) -> some View {
         content.preferredColorScheme(model.state.prefs.theme == "dark" ? .dark : model.state.prefs.theme == "light" ? .light : nil)
-            .environment(
-                \.locale,
-                model.state.prefs.language == "system" ? .autoupdatingCurrent : Locale(identifier: model.state.prefs.language)
-            )
+            .environment(\.locale, Locale(identifier: "zh-Hans"))
             .tint(Color(red: 0.145, green: 0.388, blue: 0.922))
     }
 }

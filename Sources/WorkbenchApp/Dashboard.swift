@@ -172,7 +172,7 @@ struct Dashboard: View {
                     HStack(spacing: 9) {
                         Image(systemName: "rectangle.3.group.fill").font(.system(size: 23, weight: .semibold)).foregroundStyle(
                             .blue)
-                        Text(verbatim: "WindowWorkbench").font(.system(size: 15, weight: .semibold)).lineLimit(1)
+                        Text(verbatim: "workstack").font(.system(size: 15, weight: .semibold)).lineLimit(1)
                             .minimumScaleFactor(0.85)
                     }.padding(.vertical, 20).padding(.horizontal, 9)
                     HStack {

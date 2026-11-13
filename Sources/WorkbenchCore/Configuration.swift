@@ -21,7 +21,8 @@ public struct KeyChord: Codable, Equatable, Hashable, Sendable {
 }
 
 public struct Preferences: Codable, Equatable, Sendable {
-    public var language = "system"
+    // Retained in v1 exports for compatibility with existing installations.
+    public var language = "zh-Hans"
     public var theme = "system"
     public var menuBar = true
     public var previews = false

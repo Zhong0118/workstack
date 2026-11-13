@@ -47,6 +47,12 @@ final class Workbench: ObservableObject {
             if FileManager.default.fileExists(atPath: configPath.path) {
                 config = try LocalFile.read(WorkbenchState.self, from: configPath)
                 try config.validate()
+                // The original English release saved its untouched starter workspace on exit.
+                if config.workspaces.count == 1, config.workspaces[0].name == "My Workspace",
+                    config.workspaces[0].groups.isEmpty, config.recent.isEmpty, config.templates.isEmpty
+                {
+                    config.workspaces[0].name = tr("My Workspace")
+                }
             } else {
                 let initial = Workspace(name: tr("My Workspace"))
                 config.workspaces = [initial]
@@ -62,7 +68,6 @@ final class Workbench: ObservableObject {
             notice = tr("Configuration could not be read. Your saved files have been preserved.")
         }
         state = config
-        appLanguage = config.prefs.language
         coordinator = WindowCoordinator(controller: backend, journal: journal) { try LocalFile.write($0, to: journalPath) }
         if !journal.entries.isEmpty { notice = tr("A previous session has windows to restore. Review Recovery in Settings.") }
     }
@@ -229,7 +234,6 @@ final class Workbench: ObservableObject {
         if remember { history.append(previous); if history.count > 40 { history.removeFirst() } }
         state = next
         engagedGroups.formIntersection(groups)
-        appLanguage = next.prefs.language
         panelManager?.sync()
     }
     func change(_ edit: (inout WorkbenchState) -> Void) {

@@ -137,7 +137,7 @@ struct WindowProbe {
             let window = NSWindow(
                 contentRect: NSRect(x: 100 + (index % 6) * 35, y: 120 + (index % 5) * 25, width: 440, height: 300),
                 styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
-            window.title = "WindowWorkbench Probe"
+            window.title = "workstack 测试窗口"
             window.setAccessibilityIdentifier("WorkbenchFixture-\(index)")
             window.isReleasedWhenClosed = false
             window.makeKeyAndOrderFront(nil)

@@ -52,7 +52,7 @@ final class TabPanels {
                 if bar.frame != rect { bar.setFrame(rect, display: false) }
                 let signature =
                     p.tabs.map { $0.uuidString + model.displayName($0) }.joined() + w.id.uuidString + String(compact)
-                    + model.state.prefs.language + model.state.prefs.theme + (model.state.prefs.tabStyle ?? "")
+                    + model.state.prefs.theme + (model.state.prefs.tabStyle ?? "")
                 if contents[p.id] != signature {
                     contents[p.id] = signature
                     let strip = TabStrip(model: model, group: g.id, pane: p, compact: compact) { [weak self] hovering in
