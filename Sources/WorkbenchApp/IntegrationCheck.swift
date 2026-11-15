@@ -52,8 +52,44 @@ import WorkbenchCore
             print("integration=failed reason=isolated_test_directory_required")
             return 1
         }
-        if environment["WW_MEASURE"] == "1" {
+        if environment["WW_DEMO"] != nil, let workspace = model.activeWorkspace?.id {
+            // Fills the dashboard for a visual check. The groups hold no windows, so nothing is moved.
+            for (name, preset) in zip(["编码", "调研", "文档"], [LayoutPreset.mainAndStack, .columns, .grid]) {
+                model.addGroup(name, to: workspace)
+                if let id = model.activeWorkspace?.groups.last?.id { model.editGroup(id) { $0.apply(preset) } }
+            }
+        }
+        if environment["WW_MEASURE"] == "ui" {
+            // Every command publishes `busy` twice, and each publish refreshes the interface on the
+            // main thread the command is waiting on. This prices one refresh without taking focus.
+            do {
+                try await Task.sleep(for: .seconds(2))
+                let rounds = 300
+                func lap(_ step: () -> Void) async throws -> (cpu: Double, wall: Double) {
+                    let before = try IntegrationTiming.Usage(), start = ContinuousClock.now
+                    for _ in 0..<rounds {
+                        step()
+                        try await Task.sleep(for: .milliseconds(5))
+                    }
+                    return (try IntegrationTiming.Usage().cpuSeconds - before.cpuSeconds, IntegrationTiming.ms(since: start) / 1000)
+                }
+                let quiet = try await lap {}
+                let active = try await lap { model.busy.toggle() }
+                print(
+                    String(
+                        format: "ui_refresh n=%d cpu_ms_each=%.3f held_ms_each=%.3f", rounds,
+                        1000 * (active.cpu - quiet.cpu) / Double(rounds), 1000 * (active.wall - quiet.wall) / Double(rounds)))
+            } catch {
+                print("ui_refresh=failed \(error)")
+                return 1
+            }
+            print("integration=skipped reason=ui_refresh_only")
+            return 77
+        }
+        if let measure = environment["WW_MEASURE"], ["1", "idle"].contains(measure) {
             do { try await IntegrationTiming.idle() } catch { print("idle=failed \(error)"); return 1 }
+            // `WW_MEASURE=idle` samples the dashboard at rest without launching the focus-taking fixtures.
+            if measure == "idle" { print("integration=skipped reason=idle_sample_only"); return 77 }
         }
         guard model.backend.trusted else {
             print("integration=skipped reason=accessibility_permission")
@@ -147,7 +183,8 @@ import WorkbenchCore
         }
         func visibleStrips() -> [NSPanel] {
             NSApp.windows.compactMap { $0 as? NSPanel }.filter {
-                $0.isVisible && $0.styleMask.contains(.nonactivatingPanel) && $0.level == .floating
+                // A strip that is fading out stays ordered in for a moment but no longer takes clicks.
+                $0.isVisible && !$0.ignoresMouseEvents && $0.styleMask.contains(.nonactivatingPanel) && $0.level == .floating
             }
         }
         try await wait("four fixture windows") { fixtures().count == 4 }
@@ -180,6 +217,8 @@ import WorkbenchCore
             state.workspaces[i].groups[0].insert(missing)
             state.identities[missing] = stale
             state.prefs.hidePrevious = true
+            // The scenario below verifies the opt-in minimizing path end to end.
+            state.prefs.minimizesInactiveTabs = true
         }
         model.rebind(missing, to: spare)
         try await settle()
@@ -229,6 +268,65 @@ import WorkbenchCore
                 && NSWorkspace.shared.frontmostApplication?.processIdentifier == firstPID
         }
         print("integration_step=cross_app_split_tab_panel passed")
+
+        // Default behaviour: inactive tabs stay stacked behind the active one and a switch only raises.
+        model.change { $0.prefs.minimizesInactiveTabs = false }
+        try await settle()
+        func selectStacked(_ id: UUID, pid: pid_t) async throws {
+            model.selectTab(id, group: group)
+            try await settle()
+            try await wait("stacked tab focus") {
+                fixtures().contains { $0.id == id && $0.focused }
+                    && NSWorkspace.shared.frontmostApplication?.processIdentifier == pid && visibleStrips().count == 1
+            }
+            let front = try await actual(id), behind = try await actual(id == tabA ? tabB : tabA)
+            try require(
+                !front.minimized && !behind.minimized && behind.frame.roughlyEquals(front.frame)
+                    && front.frame.roughlyEquals(selected.frame), "stacked tabs do not share the pane frame")
+        }
+        try await selectStacked(tabB, pid: secondPID)
+        try await selectStacked(tabA, pid: firstPID)
+        // Once the tabs are stacked, a switch keeps its strip in place instead of hiding and re-showing it.
+        let steady = model.panelManager?.presentations
+        try await selectStacked(tabB, pid: secondPID)
+        try await selectStacked(tabA, pid: firstPID)
+        try require(model.panelManager?.presentations == steady, "strip blinked during a stacked tab switch")
+
+        // Moving the active window by hand detaches the strip. It returns on the settled frame.
+        func strip(on frame: CGRect) -> Bool {
+            visibleStrips().contains { abs($0.frame.minX - frame.minX) <= 2 && abs($0.frame.width - frame.width) <= 2 }
+        }
+        guard let runtime = model.bindings[tabA], let attached = steady else { throw Failure("strip state missing") }
+        for (round, target) in [selected.frame.offsetBy(dx: 48, dy: 36), selected.frame].enumerated() {
+            try await wait("strip attached before move") { visibleStrips().count == 1 }
+            try await model.backend.setFrame(target, for: runtime)
+            try await wait("strip left the moving window") { visibleStrips().isEmpty }
+            try await wait("strip returned on the settled frame") {
+                strip(on: target) && model.panelManager?.presentations == attached + round + 1
+            }
+        }
+        print("integration_step=strip_follows_window passed")
+        if ProcessInfo.processInfo.environment["WW_MEASURE"] == "1" {
+            try await IntegrationTiming.measure(
+                "tab_stacked", action: { model.selectTab($0.isMultiple(of: 2) ? tabB : tabA, group: group) },
+                complete: { !model.busy },
+                confirm: { index in
+                    let id = index.isMultiple(of: 2) ? tabB : tabA
+                    try require(model.notice == nil, "stacked tab commit")
+                    try await wait("published stacked tab focus") {
+                        fixtures().contains { $0.id == id && $0.focused } && visibleStrips().count == 1
+                            && !fixtures().contains { [tabA, tabB].contains($0.id) && $0.minimized }
+                    }
+                })
+        }
+        // Return to the opt-in minimizing path, with the first tab selected, for the steps below.
+        model.change { $0.prefs.minimizesInactiveTabs = true }
+        model.selectTab(tabA, group: group)
+        try await settle()
+        try await wait("minimizing path restored") {
+            fixtures().contains { $0.id == tabA && $0.focused } && fixtures().contains { $0.id == tabB && $0.minimized }
+        }
+        print("integration_step=stacked_tab_switch passed")
 
         if ProcessInfo.processInfo.environment["WW_MEASURE"] == "1" {
             try await IntegrationTiming.measure(

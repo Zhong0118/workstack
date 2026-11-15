@@ -11,6 +11,8 @@ public protocol WindowControl: AnyObject {
 
 public enum WindowCommand: Sendable {
     case place(UUID, CGRect)
+    /// Best-effort `place` for a tab hidden behind the active one. A refusal never fails the transaction.
+    case stack(UUID, CGRect)
     case conceal(UUID)
     case reveal(UUID)
     case surface(UUID)
@@ -18,7 +20,9 @@ public enum WindowCommand: Sendable {
     case restore(UUID, safeAreas: [CGRect])
     public var member: UUID {
         switch self {
-        case .place(let id, _), .conceal(let id), .reveal(let id), .surface(let id), .raise(let id), .restore(let id, _): id
+        case .place(let id, _), .stack(let id, _), .conceal(let id), .reveal(let id), .surface(let id), .raise(let id),
+            .restore(let id, _):
+            id
         }
     }
 }
@@ -75,15 +79,29 @@ public final class WindowCoordinator {
                 guard previous == nil || previous?.identity == live.identity else { throw ControlError.recoveryRequired }
                 var lease = previous ?? WindowLease(identity: live.identity)
                 switch command {
-                case .place(_, let target):
+                case .place(_, let target), .stack(_, let target):
                     guard live.movable, live.resizable, !live.minimized, !live.frame.roughlyEquals(target) else { continue }
                     if lease.expectedFrame?.roughlyEquals(live.frame) != true { lease.originalFrame = live.frame }
                     lease.expectedFrame = target
                     try record(lease, for: member)
-                    before.append((member, live, previous, command))
-                    try await controller.setFrame(target, for: runtime)
-                    let actual = try await controller.read(runtime)
-                    guard actual.frame.roughlyEquals(target, tolerance: 3) else { throw ControlError.unexpectedFrame }
+                    before.append((member, live, previous, .place(member, target)))
+                    do {
+                        try await controller.setFrame(target, for: runtime)
+                        let actual = try await controller.read(runtime)
+                        guard actual.frame.roughlyEquals(target, tolerance: 3) else { throw ControlError.unexpectedFrame }
+                    } catch {
+                        guard case .stack = command else { throw error }
+                        // A hidden tab that refuses the pane's size must not undo the visible layout.
+                        // Lease whatever frame it settled on so it can still be restored.
+                        guard let settled = try? await controller.read(runtime) else { continue }
+                        if settled.frame.roughlyEquals(live.frame) {
+                            before.removeLast()
+                            try record(previous, for: member)
+                        } else {
+                            lease.expectedFrame = settled.frame
+                            try record(lease, for: member)
+                        }
+                    }
                 case .conceal:
                     guard live.minimizable, !live.minimized, unique.contains(member), live.identity.permitsRecovery else {
                         continue
@@ -153,7 +171,7 @@ public final class WindowCoordinator {
                             if item.live.minimized { try record(item.lease, for: item.member) }
                             try await controller.setMinimized(item.live.minimized, for: now.id)
                         }
-                    case .raise, .surface, .restore: break
+                    case .raise, .surface, .restore, .stack: break
                     }
                     try record(item.lease, for: item.member)
                 } catch { rollbackFailures.insert(item.member) }

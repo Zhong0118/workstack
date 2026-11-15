@@ -42,13 +42,16 @@ extension Dashboard {
                     HStack {
                         Text(w.name).font(.headline).lineLimit(1)
                         Spacer()
-                        if active { Image(systemName: "checkmark.circle.fill").foregroundStyle(.blue).help(d("Active workspace")) }
+                        if active {
+                            Image(systemName: "checkmark.circle.fill").foregroundStyle(Color.accentColor).help(
+                                d("Active workspace"))
+                        }
                     }
                     Text(workspaceDetail(w)).font(.caption).foregroundStyle(.secondary)
                     Label(d("Enter workspace"), systemImage: "arrow.right.circle").font(.callout.weight(.medium)).foregroundStyle(
-                        .blue)
+                        Color.accentColor)
                 }.frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
-            }.buttonStyle(.plain).disabled(model.busy)
+            }.buttonStyle(.plain).disabledWhileBusy()
                 .accessibilityHint(d("Activate workspace"))
                 .accessibilityValue(active ? d("Active workspace") : "")
             HStack {
@@ -61,9 +64,7 @@ extension Dashboard {
                 }
                 .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().accessibilityLabel(d("Workspace actions"))
             }.padding(.top, 8)
-        }.padding(small ? 8 : 11)
-            .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 9))
-            .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(active ? Color.accentColor : Color.secondary.opacity(0.2)))
+        }.modifier(DeskCard(selected: active, compact: small, animated: model.state.prefs.enableAnimations))
             .contextMenu { workspaceMenu(w) }
     }
     func workspaceDetail(_ w: Workspace) -> String {
@@ -95,9 +96,10 @@ extension Dashboard {
                         }
                         Spacer()
                         if model.state.activeID == w.id {
-                            Label(d("Active workspace"), systemImage: "checkmark.circle.fill").font(.callout).foregroundStyle(.blue)
+                            Label(d("Active workspace"), systemImage: "checkmark.circle.fill").font(.callout).foregroundStyle(
+                                Color.accentColor)
                         } else {
-                            Button(d("Activate workspace")) { activateWorkspace(w.id) }.disabled(model.busy)
+                            Button(d("Activate workspace")) { activateWorkspace(w.id) }.disabledWhileBusy()
                         }
                         Menu {
                             workspaceMenu(w)
@@ -143,7 +145,7 @@ extension Dashboard {
     }
     var permissionBanner: some View {
         HStack(alignment: .top, spacing: 11) {
-            Image(systemName: "accessibility").font(.title2).foregroundStyle(.blue)
+            Image(systemName: "accessibility").font(.title2).foregroundStyle(Color.accentColor)
             VStack(alignment: .leading, spacing: 5) {
                 Text(d("Connect your Mac windows")).fontWeight(.semibold)
                 Text(d("Allow Accessibility access to find, move and switch windows.")).font(.callout).foregroundStyle(.secondary)
@@ -208,12 +210,12 @@ extension Dashboard {
                     if grid { DeskPreview(group: g).frame(height: small ? 70 : 95) }
                     Text(g.name).font(.headline).lineLimit(1)
                     Text(groupDetail(g)).font(.caption).foregroundStyle(.secondary)
-                    Label(d("Focus group"), systemImage: "scope").font(.callout.weight(.medium)).foregroundStyle(.blue)
+                    Label(d("Focus group"), systemImage: "scope").font(.callout.weight(.medium)).foregroundStyle(Color.accentColor)
                 }.frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
-            }.buttonStyle(.plain).disabled(model.busy || g.memberIDs.isEmpty).accessibilityHint(d("Focus group"))
+            }.buttonStyle(.plain).disabledWhileBusy(or: g.memberIDs.isEmpty).accessibilityHint(d("Focus group"))
             HStack {
                 Button(d("Edit layout")) { selectGroup(g, edit: true) }
-                Button(d("Apply layout")) { model.apply(g.id) }.disabled(model.busy || g.memberIDs.isEmpty)
+                Button(d("Apply layout")) { model.apply(g.id) }.disabledWhileBusy(or: g.memberIDs.isEmpty)
                 Spacer(minLength: 1)
                 Menu {
                     groupMenu(g)
@@ -222,12 +224,7 @@ extension Dashboard {
                 }
                 .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().accessibilityLabel(d("Group actions"))
             }.controlSize(.small).padding(.top, 8)
-        }.padding(small ? 8 : 11)
-            .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 9))
-            .overlay(
-                RoundedRectangle(cornerRadius: 9).strokeBorder(
-                    selectedGroup == g.id ? Color.accentColor : Color.secondary.opacity(0.2))
-            )
+        }.modifier(DeskCard(selected: selectedGroup == g.id, compact: small, animated: model.state.prefs.enableAnimations))
             .contextMenu { groupMenu(g) }
     }
     var windowsView: some View {
@@ -343,7 +340,7 @@ extension Dashboard {
     func resultRow(_ title: String, symbol: String, detail: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             HStack(spacing: 10) {
-                Image(systemName: symbol).foregroundStyle(.blue).frame(width: 25)
+                Image(systemName: symbol).foregroundStyle(Color.accentColor).frame(width: 25)
                 Text(title).lineLimit(1)
                 Spacer()
                 Text(detail).font(.callout).foregroundStyle(.secondary).lineLimit(1)
@@ -354,7 +351,7 @@ extension Dashboard {
 }
 
 struct DeskPreview: View {
-    @EnvironmentObject var model: Workbench
+    @Environment(Workbench.self) var model
     let group: DeskGroup
     var body: some View {
         Canvas { ctx, size in

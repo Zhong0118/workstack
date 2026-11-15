@@ -98,7 +98,10 @@ import WorkbenchCore
     let model = Workbench(directory: directory, controller: system)
     model.update(Array(system.windows.values), permission: true, screens: [AppTestWindows.screen])
     let group = WindowGroup(name: "Tabs", root: .pane(id: UUID(), tabs: [first, second], active: first))
-    try model.change { $0.workspaces[0].groups = [WindowGroup(name: "Peer", floating: [peer]), group] }.get()
+    try model.change {
+        $0.workspaces[0].groups = [WindowGroup(name: "Peer", floating: [peer]), group]
+        $0.prefs.minimizesInactiveTabs = true
+    }.get()
     model.selectTab(second, group: group.id)
     try await settle(model)
     model.update(Array(system.windows.values), permission: true, screens: [AppTestWindows.screen])

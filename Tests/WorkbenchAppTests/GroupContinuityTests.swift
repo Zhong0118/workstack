@@ -16,6 +16,7 @@ import WorkbenchCore
     let model = Workbench(directory: directory, controller: system)
     let original = try await system.read(first)
     model.update(Array(system.windows.values), permission: true, screens: [AppTestWindows.screen])
+    try model.change { $0.prefs.minimizesInactiveTabs = true }.get()
     let workspace = try #require(model.state.activeID)
     let group = try await model.createAndApplyGroup(
         name: "标签组", workspace: workspace, members: [first, third, second], preset: .tabs
@@ -62,6 +63,7 @@ import WorkbenchCore
     let system = AppTestWindows(), first = system.add(), next = system.add()
     let model = Workbench(directory: directory, controller: system)
     model.update(Array(system.windows.values), permission: true, screens: [AppTestWindows.screen])
+    try model.change { $0.prefs.minimizesInactiveTabs = true }.get()
     let workspace = try #require(model.state.activeID)
     _ = try await model.createAndApplyGroup(name: "原组", workspace: workspace, members: [first, next], preset: .tabs).get()
     model.update(Array(system.windows.values), permission: true, screens: [AppTestWindows.screen])
@@ -104,4 +106,44 @@ import WorkbenchCore
     try await settle(model)
     #expect(system.windows[second]?.minimized == false && system.windows[unrelated]?.focused == true)
     #expect(system.focusedIDs == focusRequests)
+}
+
+@Test @MainActor func tabsStackBehindTheActiveWindowAndSwitchWithoutMinimizing() async throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let system = AppTestWindows(), first = system.add(), second = system.add(), third = system.add()
+    let parked = system.add(minimized: true)
+    let originals = system.windows
+    let model = Workbench(directory: directory, controller: system)
+    model.update(Array(system.windows.values), permission: true, screens: [AppTestWindows.screen])
+    let workspace = try #require(model.state.activeID)
+    let group = try await model.createAndApplyGroup(
+        name: "标签组", workspace: workspace, members: [first, second, third, parked], preset: .tabs
+    ).get()
+    let pane = try await system.read(first).frame
+    #expect(system.windows[first]?.focused == true)
+    // Every available tab shares the pane frame and none is sent to the Dock.
+    #expect([second, third].allSatisfy { system.windows[$0]?.frame == pane && system.windows[$0]?.minimized == false })
+    #expect(system.windows[parked] == originals[parked])
+
+    model.update(Array(system.windows.values), permission: true, screens: [AppTestWindows.screen])
+    model.selectTab(second, group: group)
+    try await settle(model)
+    #expect(system.focusedIDs.last == second && system.windows[second]?.frame == pane)
+    #expect([first, third].allSatisfy { system.windows[$0]?.minimized == false })
+
+    // The user drags the active tab. The next switch brings the whole stack along.
+    let moved = pane.offsetBy(dx: 40, dy: 60)
+    system.windows[second]?.frame = moved
+    model.update(Array(system.windows.values), permission: true, screens: [AppTestWindows.screen])
+    model.selectTab(third, group: group)
+    try await settle(model)
+    #expect(system.focusedIDs.last == third)
+    #expect([first, second, third].allSatisfy { system.windows[$0]?.frame == moved })
+
+    model.update(Array(system.windows.values), permission: true, screens: [AppTestWindows.screen])
+    await model.finish()
+    // Windows we moved go home. The one the user placed by hand keeps the user's position.
+    #expect([first, third].allSatisfy { system.windows[$0]?.frame == originals[$0]?.frame })
+    #expect(system.windows[second]?.frame == moved && model.journalCount == 0)
 }

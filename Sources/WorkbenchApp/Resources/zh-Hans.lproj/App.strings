@@ -27,6 +27,7 @@
 "Interface animations" = "界面动画";
 "Language" = "语言";
 "Minimize previous workspace when recoverable" = "切换时最小化上个工作区中可安全恢复的窗口";
+"Inactive tabs stay behind the active window. Minimizing hides them but waits for the system animation." = "后台标签默认叠放在活动窗口后面，切换时只需置前。开启后会把它们收进程序坞，隐藏更彻底，但每次切换都要等系统动画播完。";
 "Minimize recoverable inactive tabs" = "最小化可安全恢复的后台标签";
 "Modifier keys" = "修饰键";
 "My Workspace" = "我的工作区";

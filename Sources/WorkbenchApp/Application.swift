@@ -25,12 +25,14 @@ final class Lifecycle: NSObject, NSApplicationDelegate {
 @main
 struct WorkstackApp: App {
     @NSApplicationDelegateAdaptor(Lifecycle.self) var lifecycle
-    @StateObject private var model = Workbench(directory: IntegrationCheck.storageDirectory)
+    @State private var model = Workbench(directory: IntegrationCheck.storageDirectory)
     @Environment(\.openWindow) var openWindow
     @State private var started = false
     var body: some Scene {
+        // Read here so the scene follows the preference. The binding's getter runs outside tracking.
+        let showsMenuBar = !IntegrationCheck.isQA && model.state.prefs.menuBar
         Window("workstack", id: "dashboard") {
-            Dashboard().environmentObject(model).modifier(Appearance(model: model))
+            Dashboard().environment(model).modifier(Appearance(model: model))
                 .onAppear {
                     guard !started else { return }
                     started = true
@@ -48,46 +50,33 @@ struct WorkstackApp: App {
                     }
                 }
         }.defaultSize(width: 1170, height: 755)
+            // Each page carries its own heading, so the toolbar is left to search and actions.
+            .windowToolbarStyle(.unified(showsTitle: false))
             .commands {
                 CommandMenu(tr("Workspace")) {
                     Button(tr("Quick Switcher")) { model.openSwitcher() }
                     Button(tr("Next tab")) { model.stepTab(1) }.keyboardShortcut("]", modifiers: [.command, .shift])
                     Button(tr("Previous tab")) { model.stepTab(-1) }.keyboardShortcut("[", modifiers: [.command, .shift])
                     Divider()
-                    Button(tr("Undo workspace change")) { model.undo() }.keyboardShortcut("z", modifiers: [.command, .option])
-                        .disabled(!model.canUndo)
+                    UndoCommand(model: model)
                     Button(tr("Restore original windows")) { model.restore() }
                 }
             }
         Settings {
-            WorkbenchSettings().environmentObject(model).modifier(Appearance(model: model))
+            WorkbenchSettings().environment(model).modifier(Appearance(model: model))
         }
         Window(tr("Quick Switcher"), id: "switcher") {
-            QuickSwitcher().environmentObject(model).modifier(Appearance(model: model))
+            QuickSwitcher().environment(model).modifier(Appearance(model: model))
         }.windowStyle(.hiddenTitleBar).windowResizability(.contentSize)
             .defaultPosition(.center)
         MenuBarExtra(
             isInserted: Binding(
-                get: { !IntegrationCheck.isQA && model.state.prefs.menuBar },
+                get: { showsMenuBar },
                 set: { value in
                     if !IntegrationCheck.isQA { model.change { $0.prefs.menuBar = value } }
                 })
         ) {
-            Button(tr("Open dashboard")) {
-                openWindow(id: "dashboard"); NSApp.activate(ignoringOtherApps: true)
-            }
-            Button(tr("Quick Switcher")) { model.openSwitcher() }
-            Divider()
-            ForEach(model.state.workspaces) { ws in
-                Button {
-                    model.activate(ws.id)
-                } label: {
-                    if ws.id == model.state.activeID { Label(ws.name, systemImage: "checkmark") } else { Text(ws.name) }
-                }
-            }
-            Divider()
-            SettingsLink { Text(tr("Settings")) }
-            Button(tr("Quit workstack")) { NSApp.terminate(nil) }
+            MenuBarContent(model: model)
         } label: {
             Label("workstack", systemImage: "rectangle.3.group")
         }
@@ -95,17 +84,47 @@ struct WorkstackApp: App {
     }
 }
 
+/// Menu items are views of their own so only they follow the model, not the whole scene list.
+private struct UndoCommand: View {
+    let model: Workbench
+    var body: some View {
+        Button(tr("Undo workspace change")) { model.undo() }.keyboardShortcut("z", modifiers: [.command, .option])
+            .disabled(!model.canUndo)
+    }
+}
+
+private struct MenuBarContent: View {
+    let model: Workbench
+    @Environment(\.openWindow) var openWindow
+    var body: some View {
+        Button(tr("Open dashboard")) {
+            openWindow(id: "dashboard"); NSApp.activate(ignoringOtherApps: true)
+        }
+        Button(tr("Quick Switcher")) { model.openSwitcher() }
+        Divider()
+        ForEach(model.state.workspaces) { ws in
+            Button {
+                model.activate(ws.id)
+            } label: {
+                if ws.id == model.state.activeID { Label(ws.name, systemImage: "checkmark") } else { Text(ws.name) }
+            }
+        }
+        Divider()
+        SettingsLink { Text(tr("Settings")) }
+        Button(tr("Quit workstack")) { NSApp.terminate(nil) }
+    }
+}
+
 private struct Appearance: ViewModifier {
-    @ObservedObject var model: Workbench
+    let model: Workbench
     func body(content: Content) -> some View {
         content.preferredColorScheme(model.state.prefs.theme == "dark" ? .dark : model.state.prefs.theme == "light" ? .light : nil)
             .environment(\.locale, Locale(identifier: "zh-Hans"))
-            .tint(Color(red: 0.145, green: 0.388, blue: 0.922))
     }
 }
 
 private struct QuickSwitcher: View {
-    @EnvironmentObject var model: Workbench
+    @Environment(Workbench.self) var model
     @Environment(\.dismissWindow) var dismissWindow
     @Environment(\.openWindow) var openWindow
     @State var query = ""
@@ -119,7 +138,7 @@ private struct QuickSwitcher: View {
         let groups = model.groupList.map { g in
             Result(id: g.id.uuidString, title: g.name, symbol: "rectangle.3.group") { model.focusGroup(g.id) }
         }
-        let windows = model.windows.map { w in
+        let windows = model.windows.filter(model.canFocus).map { w in
             Result(id: w.id.uuidString, title: model.displayName(w.id), symbol: "macwindow") { model.focus(w.id) }
         }
         let commands = [

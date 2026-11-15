@@ -21,7 +21,7 @@ extension Workbench {
 
         busy = true
         notice = nil
-        defer { busy = false; panelManager?.sync() }
+        defer { busy = false; panelManager?.sync(afterOperation: true) }
         do {
             var next = state
             let selected = Set(members)

@@ -1,5 +1,5 @@
 import AppKit
-import Combine
+import Observation
 import MacWindows
 import WorkbenchCore
 
@@ -7,16 +7,19 @@ private struct EditError: LocalizedError {
     var errorDescription: String?
 }
 
-@MainActor
-final class Workbench: ObservableObject {
-    @Published private(set) var state: WorkbenchState
-    @Published private(set) var windows: [LiveWindow] = []
-    @Published private(set) var displays: [DisplayArea] = []
-    @Published private(set) var trusted = false
-    @Published var busy = false
-    @Published var noticeIsFailure = false
-    @Published var notice: String? {
-        didSet { noticeIsFailure = false }
+/// Observation tracks each property separately, so a view refreshes only when something it
+/// reads changes. With one change notification for the whole object, every window title
+/// change rebuilt the app's scenes and the entire dashboard.
+@MainActor @Observable
+final class Workbench {
+    private(set) var state: WorkbenchState
+    private(set) var windows: [LiveWindow] = []
+    private(set) var displays: [DisplayArea] = []
+    private(set) var trusted = false
+    var busy = false
+    var noticeIsFailure = false
+    var notice: String? {
+        didSet { if noticeIsFailure { noticeIsFailure = false } }
     }
     let backend: MacWindows
     let coordinator: WindowCoordinator
@@ -28,12 +31,12 @@ final class Workbench: ObservableObject {
     var failedOperations = 0
     var readOnly = false
     var terminating = false
-    var panelManager: TabPanels?
-    var hotkey: GlobalShortcut?
+    @ObservationIgnored var panelManager: TabPanels?
+    @ObservationIgnored var hotkey: GlobalShortcut?
     var engagedGroups = Set<UUID>()
-    var presentSwitcher: (() -> Void)?
-    var presentDashboard: (() -> Void)?
-    private let icons = NSCache<NSString, NSImage>()
+    @ObservationIgnored var presentSwitcher: (() -> Void)?
+    @ObservationIgnored var presentDashboard: (() -> Void)?
+    @ObservationIgnored private let icons = NSCache<NSString, NSImage>()
     var canUndo: Bool { !history.isEmpty && !busy }
     var journalCount: Int { coordinator.journal.entries.count }
     var configURL: URL { directory.appendingPathComponent("workspaces.json") }
@@ -96,6 +99,7 @@ final class Workbench: ObservableObject {
         }
         configureShortcut()
         backend.onChange = { [weak self] snapshot in self?.update(snapshot) }
+        backend.onMotion = { [weak self] pid in self?.panelManager?.windowMoved(pid: pid) }
         authorizeRecovery()
         backend.start()
         refresh()
@@ -124,7 +128,7 @@ final class Workbench: ObservableObject {
         let nextDisplays = screens ?? MacDisplay.all
         let displayChanged = !displays.isEmpty && displays != nextDisplays
         if displays != nextDisplays { displays = nextDisplays }
-        raw = snapshot
+        if raw != snapshot { raw = snapshot }
         var known = coordinator.journal.entries.mapValues(\.identity)
         known.merge(state.identities) { first, _ in first }
         let candidates = Dictionary(grouping: snapshot.filter { $0.identity.permitsRecovery }, by: \.identity)
@@ -139,7 +143,7 @@ final class Workbench: ObservableObject {
             let logical = same ?? (safe ? matches[0] : w.id)
             if used.insert(logical).inserted { lookup[logical] = w.id }
         }
-        bindings = lookup
+        if bindings != lookup { bindings = lookup }
         let reverse = Dictionary(uniqueKeysWithValues: lookup.map { ($1, $0) })
         let remapped = snapshot.compactMap { item -> LiveWindow? in
             guard let id = reverse[item.id], !state.prefs.excludedApps.contains(item.bundleID),

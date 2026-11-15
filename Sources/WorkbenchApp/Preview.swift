@@ -3,7 +3,7 @@ import SwiftUI
 import WorkbenchCore
 
 struct PreviewButton: View {
-    @EnvironmentObject var model: Workbench
+    @Environment(Workbench.self) var model
     let member: UUID
     @State private var showing = false
     var body: some View {
@@ -14,7 +14,7 @@ struct PreviewButton: View {
                 Label(tr("Preview window"), systemImage: "eye")
             }
             .popover(isPresented: $showing) {
-                WindowPreview(member: member).environmentObject(model)
+                WindowPreview(member: member).environment(model)
             }
         }
     }
@@ -22,7 +22,7 @@ struct PreviewButton: View {
 
 @MainActor
 private struct WindowPreview: View {
-    @EnvironmentObject var model: Workbench
+    @Environment(Workbench.self) var model
     let member: UUID
     @State var image: NSImage?
     @State var failed = false

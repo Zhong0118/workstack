@@ -15,9 +15,9 @@ extension Workbench {
             return
         }
         busy = true
-        notice = nil
+        if notice != nil { notice = nil }
         Task {
-            defer { busy = false; panelManager?.sync() }
+            defer { busy = false; panelManager?.sync(afterOperation: true) }
             do {
                 try await operation()
                 completedOperations += 1
@@ -133,7 +133,12 @@ extension Workbench {
                     }
                     result.append(.place(active, rect))
                     for id in tabs where id != active {
-                        result.append(document.prefs.minimizeTabs && canSafelyMinimize(id) ? .conceal(id) : .reveal(id))
+                        if document.prefs.minimizesInactiveTabs && canSafelyMinimize(id) {
+                            result.append(.conceal(id))
+                        } else {
+                            // Parked behind the active tab, so selecting it later is a raise, not a move.
+                            result += [.reveal(id), .stack(id, rect)]
+                        }
                     }
                 }
             }
@@ -202,6 +207,13 @@ extension Workbench {
         }
     }
 
+    /// Mirrors what `focus` can deliver: dialogs, panels, full-screen windows and windows
+    /// the user minimized themselves are rejected by the coordinator.
+    func canFocus(_ window: LiveWindow) -> Bool {
+        window.kind == .normal && !window.fullscreen
+            && (!window.minimized || coordinator.journal.entries[window.id]?.minimizedByUs == true)
+    }
+
     func focus(_ member: UUID) {
         guard bindings[member] != nil else { reportFailure(WindowAccessError.unavailable); return }
         if let g = groupList.first(where: {
@@ -242,7 +254,13 @@ extension Workbench {
                 cmds.append(.reveal(member))
                 if let previous, previous.id != member { cmds.append(.place(member, previous.frame)) }
                 for id in pane.tabs where id != member && self.bindings[id] != nil {
-                    cmds.append(self.state.prefs.minimizeTabs && self.canSafelyMinimize(id) ? .conceal(id) : .reveal(id))
+                    if self.state.prefs.minimizesInactiveTabs && self.canSafelyMinimize(id) {
+                        cmds.append(.conceal(id))
+                    } else {
+                        cmds.append(.reveal(id))
+                        // Follow a pane the user dragged or resized since the layout was applied.
+                        if let previous { cmds.append(.stack(id, previous.frame)) }
+                    }
                 }
                 cmds.append(.raise(member))
             }

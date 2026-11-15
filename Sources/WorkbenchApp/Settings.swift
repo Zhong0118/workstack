@@ -24,16 +24,24 @@ private enum SettingsPage: String, CaseIterable, Identifiable {
 }
 
 struct WorkbenchSettings: View {
-    @EnvironmentObject var model: Workbench
+    @Environment(Workbench.self) var model
     @State private var page = SettingsPage.general
-    @State private var login = SMAppService.mainApp.status == .enabled
-    @State private var captureGranted = CGPreflightScreenCaptureAccess()
+    // Both values come from synchronous system queries. SwiftUI rebuilds this view's value
+    // whenever the app's scenes refresh, so they are read when the window appears instead.
+    @State private var login = false
+    @State private var captureGranted = false
     @State private var appID = ""
     @State private var titleMatch = ""
     @State private var target: UUID?
     @State private var status = ""
     @State private var reset = false
+    @State private var gapDraft: Double?
 
+    private func commitGap() {
+        guard let value = gapDraft else { return }
+        gapDraft = nil
+        model.change { $0.prefs.gap = value }
+    }
     func pref<T>(_ key: WritableKeyPath<Preferences, T>) -> Binding<T> {
         Binding(get: { model.state.prefs[keyPath: key] }, set: { value in model.change { $0.prefs[keyPath: key] = value } })
     }
@@ -61,6 +69,16 @@ struct WorkbenchSettings: View {
                 }
             }
         }.frame(width: 690, height: 490)
+            // Keyboard and accessibility adjustments never report the end of editing.
+            .task(id: gapDraft) {
+                guard gapDraft != nil else { return }
+                try? await Task.sleep(for: .milliseconds(300))
+                if !Task.isCancelled { commitGap() }
+            }
+            .onAppear {
+                login = SMAppService.mainApp.status == .enabled
+                captureGranted = CGPreflightScreenCaptureAccess()
+            }
             .confirmationDialog(tr("Reset preferences?"), isPresented: $reset) {
                 Button(tr("Restore defaults"), role: .destructive) { model.change { $0.prefs = Preferences() } }
             }
@@ -108,15 +126,16 @@ struct WorkbenchSettings: View {
                 Text(tr("Standard")).tag("standard"); Text(tr("Compact")).tag("compact")
             }
             Toggle(tr("Collapse tab bar until hover"), isOn: pref(\.tabAutoHide))
-            Toggle(tr("Minimize recoverable inactive tabs"), isOn: pref(\.minimizeTabs))
+            Toggle(tr("Minimize recoverable inactive tabs"), isOn: pref(\.minimizesInactiveTabs))
+            Text(tr("Inactive tabs stay behind the active window. Minimizing hides them but waits for the system animation."))
+                .font(.caption).foregroundStyle(.secondary)
         case .layouts:
-            Slider(value: pref(\.gap), in: 0...32, step: 1) {
-                Text(tr("Gap"))
-            } minimumValueLabel: {
-                Text("0")
-            } maximumValueLabel: {
-                Text("\(Int(model.state.prefs.gap)) 点")
-            }
+            // Dragging previews locally and saves once, so one drag is one undo step and one file write.
+            Slider(
+                value: Binding(get: { gapDraft ?? model.state.prefs.gap }, set: { gapDraft = $0 }), in: 0...32, step: 1,
+                label: { Text(tr("Gap")) }, minimumValueLabel: { Text("0") },
+                maximumValueLabel: { Text("\(Int(gapDraft ?? model.state.prefs.gap)) 点") },
+                onEditingChanged: { editing in if !editing { commitGap() } })
             Toggle(tr("Snap dividers to common ratios"), isOn: pref(\.snapRatios))
             LabeledContent(tr("Saved layouts"), value: "\(model.state.templates.count)")
         case .shortcuts:

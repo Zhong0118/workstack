@@ -4,6 +4,8 @@ import WorkbenchCore
 
 @MainActor public final class MacWindows: WindowControl {
     public var onChange: (([LiveWindow]) -> Void)?
+    /// Called as soon as a window of the process reports a move or resize, ahead of `onChange`.
+    public var onMotion: ((pid_t) -> Void)?
     public var trusted: Bool { AXIsProcessTrusted() }
     private var workers: [pid_t: ProcessWindows] = [:]
     private var snapshots: [pid_t: [LiveWindow]] = [:]
@@ -21,6 +23,10 @@ import WorkbenchCore
     private var running = false
     private var lastFrontmost: pid_t?
     private var allowedApplications: [NSRunningApplication]?
+    private var beats = 0
+    /// Every fifth heartbeat (one minute) revisits every eligible process.
+    private static let sweepInterval = 5
+    private static let maxFailures = 6
 
     public init(allowedApplications: [NSRunningApplication]? = nil) {
         self.allowedApplications = allowedApplications
@@ -62,6 +68,7 @@ import WorkbenchCore
         }
         listen(.default, NSApplication.didChangeScreenParametersNotification)
         listen(.default, .workbenchAXEvent)
+        listen(.default, .workbenchAXMotion)
         refresh()
         // Cover AX implementations that omit notifications and notice a TCC change.
         heartbeat = Task { [weak self] in
@@ -118,6 +125,8 @@ import WorkbenchCore
             refresh()
         case .workbenchAXEvent:
             if let pid { schedule(pid) }
+        case .workbenchAXMotion:
+            if let pid, !sleeping { onMotion?(pid) }
         default:
             guard let pid else { return }
             if name == NSWorkspace.didTerminateApplicationNotification {
@@ -161,10 +170,17 @@ import WorkbenchCore
         let active = Set(apps.map(\.processIdentifier))
         for pid in Array(workers.keys) where !active.contains(pid) { remove(pid) }
         lastFrontmost = NSWorkspace.shared.frontmostApplication?.processIdentifier
+        if !force { beats += 1 }
+        // Each scan wakes its target process and parks one thread on the reply. Launch,
+        // activation and AX events already cover windowless background agents, so most
+        // heartbeats only revisit applications that can plausibly own a window.
+        let sweep = force || beats % Self.sweepInterval == 0
         for app in apps {
-            discover(app)
+            let pid = app.processIdentifier
+            let created = discover(app)
+            guard sweep || created || app.activationPolicy == .regular || snapshots[pid]?.isEmpty == false else { continue }
             // A heartbeat never cuts short an unresponsive process's backoff.
-            schedule(app.processIdentifier, immediate: force)
+            schedule(pid, immediate: force)
         }
         publish()
     }
@@ -174,11 +190,13 @@ import WorkbenchCore
             && isAllowed(app) && app.activationPolicy != .prohibited && !app.isTerminated
     }
 
-    private func discover(_ app: NSRunningApplication) {
-        guard eligible(app) else { return }
+    /// Returns whether a worker was created, so a process seen for the first time is always scanned once.
+    @discardableResult
+    private func discover(_ app: NSRunningApplication) -> Bool {
+        guard eligible(app) else { return false }
         let pid = app.processIdentifier
         if let old = workers[pid] {
-            if old.info.launched == app.launchDate && old.info.bundle == (app.bundleIdentifier ?? "") { return }
+            if old.info.launched == app.launchDate && old.info.bundle == (app.bundleIdentifier ?? "") { return false }
             remove(pid)
         }
         workers[pid] = ProcessWindows(
@@ -186,6 +204,7 @@ import WorkbenchCore
                 pid: pid, bundle: app.bundleIdentifier ?? "",
                 name: app.localizedName ?? "", launched: app.launchDate))
         workers[pid]?.authorizeRecovery(recoverable.filter { $0.pid == pid })
+        return true
     }
 
     private func clear() {
@@ -233,8 +252,12 @@ import WorkbenchCore
                 for window in snapshot.windows { self.owners[window.id] = pid }
                 self.publish()
             case .failure:
-                self.failures[pid] = min(6, (self.failures[pid] ?? 0) + 1)
-                self.dirty.insert(pid)
+                let attempts = min(Self.maxFailures, (self.failures[pid] ?? 0) + 1)
+                self.failures[pid] = attempts
+                // Once the backoff is saturated, stop retrying on our own. A process that never
+                // answers AX would otherwise park a thread for the full timeout forever; the next
+                // event, activation or full sweep gives it another chance.
+                if attempts < Self.maxFailures { self.dirty.insert(pid) }
             }
             if self.dirty.remove(pid) != nil { self.schedule(pid) }
         }

@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 import WorkbenchCore
 
@@ -37,7 +38,7 @@ struct DeskPickerRequest: Identifiable {
 }
 
 struct Dashboard: View {
-    @EnvironmentObject var model: Workbench
+    @Environment(Workbench.self) var model
     @Environment(\.accessibilityReduceMotion) var reduceMotion
     @State var page: DeskPage?
     @State var selectedGroup: UUID?
@@ -53,6 +54,8 @@ struct Dashboard: View {
     @State var launchRequest: DeskLaunchRequest?
     @State var deleting: DeskNameRequest?
     @State var didLoad = false
+    /// Height the toolbar covers at the top of the detail column.
+    @State var toolbarInset: CGFloat = 52
     @FocusState var searchFocused: Bool
 
     var workspaces: [Workspace] { model.state.workspaces }
@@ -65,39 +68,39 @@ struct Dashboard: View {
     var live: LiveWindow? { model.windows.first { $0.id == member } }
     var small: Bool { model.state.prefs.compact }
     var anim: Animation? {
-        reduceMotion || !model.state.prefs.enableAnimations ? nil : .easeInOut(duration: 0.18)
+        reduceMotion || !model.state.prefs.enableAnimations ? nil : .smooth(duration: 0.28)
     }
+    /// Entering a deeper level slides in slightly. With reduced motion it only fades.
+    var push: AnyTransition { reduceMotion ? .opacity : .opacity.combined(with: .offset(x: 26)) }
     var body: some View {
-        HStack(spacing: 0) {
-            sidebar.frame(width: 225).background(.regularMaterial)
-            Divider()
-            VStack(spacing: 0) {
-                topBar
-                Divider()
-                if let notice = model.notice, !notice.isEmpty {
-                    HStack {
-                        Image(systemName: model.noticeIsFailure ? "exclamationmark.triangle.fill" : "info.circle")
-                            .foregroundStyle(model.noticeIsFailure ? Color.orange : Color.blue)
-                        Text(notice).font(.callout).textSelection(.enabled)
-                        Spacer()
-                        iconButton("Dismiss", "xmark") { model.notice = nil }
-                    }.padding(10).background(Color.accentColor.opacity(0.07))
-                    Divider()
+        NavigationSplitView {
+            sidebar.navigationSplitViewColumnWidth(min: 190, ideal: 225, max: 320)
+        } detail: {
+            mainContent.frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(Color(nsColor: .windowBackgroundColor))
+                .safeAreaInset(edge: .top, spacing: 0) { noticeBanner }
+                .onGeometryChange(for: CGFloat.self) {
+                    $0.safeAreaInsets.top
+                } action: {
+                    toolbarInset = $0
                 }
-                mainContent.frame(maxWidth: .infinity, maxHeight: .infinity)
-            }
-            .background(Color(nsColor: .windowBackgroundColor))
-            if inspector {
-                Divider()
-                inspectorPanel.frame(width: 264)
-                    .transition(reduceMotion ? .opacity : .move(edge: .trailing).combined(with: .opacity))
-            }
+                .inspector(isPresented: $inspector) {
+                    inspectorPanel.inspectorColumnWidth(min: 240, ideal: 264, max: 380)
+                }
+                .toolbar { toolbarItems }
+                .searchable(text: $search, placement: .toolbar, prompt: Text(d("Search workspaces, groups, windows")))
+                .modifier(DeskSearchFocus(focused: $searchFocused))
+                .background {
+                    Button("") { focusSearch() }.keyboardShortcut("f", modifiers: .command).hidden()
+                }
         }
         .frame(minWidth: inspector ? 920 : 660, minHeight: 550)
-        .animation(anim, value: inspector)
         .animation(anim, value: page)
         .animation(anim, value: editor)
         .animation(anim, value: selectedGroup)
+        .animation(anim, value: grid)
+        .animation(anim, value: search.isEmpty)
+        .animation(anim, value: model.notice)
         .sheet(item: $naming) { req in DeskNameSheet(request: req) }
         .sheet(item: $picker) { req in DeskPicker(request: req) }
         .sheet(item: $composing) { request in
@@ -154,8 +157,17 @@ struct Dashboard: View {
     }
     func activateWorkspace(_ id: UUID) {
         guard !model.busy else { return }
+        // Show the workspace at once. Arranging its windows can take a second, and a
+        // failed activation leaves its page open with the button to try again.
+        if page != .workspace(id) { navigate(.workspace(id)) }
         model.activate(id)
-        if model.state.activeID == id { navigate(.workspace(id)) }
+    }
+    func focusSearch() {
+        if #available(macOS 15, *) {
+            searchFocused = true
+        } else {
+            NSApp.keyWindow?.toolbar?.items.lazy.compactMap { $0 as? NSSearchToolbarItem }.first?.beginSearchInteraction()
+        }
     }
     func focusGroup(_ g: DeskGroup) {
         guard !model.busy else { return }
@@ -185,102 +197,118 @@ struct Dashboard: View {
     }
     @ViewBuilder var mainContent: some View {
         if !search.isEmpty {
-            searchResults
+            searchResults.transition(.opacity)
         } else if let editor, let g = allGroups.first(where: { $0.id == editor }) {
-            editGroupView(g)
+            editGroupView(g).transition(push)
         } else {
-            switch page {
-            case .spaces: spacesOverview
-            case .windows: windowsView
-            case .templates: templatesView
-            case .recent: recentView
-            case .workspace, nil: overview
-            }
+            Group {
+                switch page {
+                case .spaces: spacesOverview
+                case .windows: windowsView
+                case .templates: templatesView
+                case .recent: recentView
+                case .workspace, nil: overview
+                }
+            }.transition(.opacity)
         }
     }
-    var sidebar: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 5) {
-                    HStack(spacing: 9) {
-                        Image(systemName: "rectangle.3.group.fill").font(.system(size: 23, weight: .semibold)).foregroundStyle(
-                            .blue)
-                        Text(verbatim: "workstack").font(.system(size: 15, weight: .semibold)).lineLimit(1)
-                            .minimumScaleFactor(0.85)
-                    }.padding(.vertical, 20).padding(.horizontal, 9)
-                    HStack {
-                        Text(d("Workspaces")).font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
-                        Spacer()
-                        iconButton("New workspace", "plus", action: addWorkspace)
-                    }.padding(.horizontal, 9).padding(.bottom, 3)
-                    sideItem(d("All workspaces"), "square.grid.2x2", .spaces)
-                    ForEach(workspaces) { w in
-                        sideItem(w.name, "rectangle.stack", .workspace(w.id), active: model.state.activeID == w.id)
-                            .contextMenu { workspaceMenu(w) }
-                    }
-                    Divider().padding(.vertical, 12)
-                    sideItem(d("All windows"), "macwindow.on.rectangle", .windows)
-                    sideItem(d("Templates"), "square.grid.2x2", .templates)
-                    sideItem(d("Recent workspaces"), "clock.arrow.circlepath", .recent)
-                }.padding(.horizontal, 11)
+    @ViewBuilder var noticeBanner: some View {
+        if let notice = model.notice, !notice.isEmpty {
+            VStack(spacing: 0) {
+                HStack {
+                    Image(systemName: model.noticeIsFailure ? "exclamationmark.triangle.fill" : "info.circle")
+                        .foregroundStyle(model.noticeIsFailure ? Color.orange : Color.accentColor)
+                    Text(notice).font(.callout).textSelection(.enabled)
+                    Spacer()
+                    iconButton("Dismiss", "xmark") { model.notice = nil }
+                }.padding(10)
+                Divider()
             }
-            Divider()
-            HStack {
-                SettingsLink {
-                    Label(d("Settings"), systemImage: "gearshape")
-                }.buttonStyle(.plain)
-                Spacer()
-                Image(systemName: model.trusted ? "checkmark.shield" : "shield.slash")
-                    .foregroundStyle(model.trusted ? Color.secondary : Color.orange)
-                    .help(d(model.trusted ? "Accessibility enabled" : "Accessibility required"))
-            }.padding(17)
+            .background(.bar)
+            .transition(reduceMotion ? .opacity : .move(edge: .top).combined(with: .opacity))
+        }
+    }
+    @ToolbarContentBuilder var toolbarItems: some ToolbarContent {
+        if editor != nil {
+            ToolbarItem(placement: .navigation) {
+                Button {
+                    editor = nil; member = nil; pane = nil
+                } label: {
+                    Label(d("Back to overview"), systemImage: "chevron.left")
+                }.help(d("Back to overview"))
+            }
+        }
+        ToolbarItem(placement: .primaryAction) { DeskUndoButton() }
+    }
+    var sidebar: some View {
+        List(
+            selection: Binding(
+                get: { page },
+                set: { dest in
+                    guard let dest, dest != page else { return }
+                    if case let .workspace(id) = dest { activateWorkspace(id) } else { navigate(dest) }
+                })
+        ) {
+            Section {
+                sideItem(d("All workspaces"), "square.grid.2x2", .spaces)
+                ForEach(workspaces) { w in
+                    sideItem(w.name, "rectangle.stack", .workspace(w.id), active: model.state.activeID == w.id)
+                        .contextMenu { workspaceMenu(w) }
+                }
+            } header: {
+                HStack {
+                    Text(d("Workspaces"))
+                    Spacer()
+                    iconButton("New workspace", "plus", action: addWorkspace)
+                }
+            }
+            Section {
+                sideItem(d("All windows"), "macwindow.on.rectangle", .windows)
+                sideItem(d("Templates"), "square.grid.2x2", .templates)
+                sideItem(d("Recent workspaces"), "clock.arrow.circlepath", .recent)
+            }
+        }
+        .listStyle(.sidebar)
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            VStack(spacing: 0) {
+                Divider()
+                HStack {
+                    SettingsLink {
+                        Label(d("Settings"), systemImage: "gearshape")
+                    }.buttonStyle(.plain)
+                    Spacer()
+                    Image(systemName: model.trusted ? "checkmark.shield" : "shield.slash")
+                        .foregroundStyle(model.trusted ? Color.secondary : Color.orange)
+                        .help(d(model.trusted ? "Accessibility enabled" : "Accessibility required"))
+                }.padding(.horizontal, 15).padding(.vertical, 11)
+            }
         }
     }
     func sideItem(_ name: String, _ symbol: String, _ dest: DeskPage, active: Bool = false) -> some View {
-        Button {
-            if case let .workspace(id) = dest { activateWorkspace(id) } else { navigate(dest) }
-        } label: {
-            HStack(spacing: 9) {
-                Image(systemName: symbol).frame(width: 19)
-                Text(name).lineLimit(1)
-                Spacer(minLength: 1)
-                if active {
-                    Image(systemName: "checkmark.circle.fill").font(.caption).foregroundStyle(.blue).help(d("Active workspace"))
-                }
+        HStack(spacing: 6) {
+            Label(name, systemImage: symbol).lineLimit(1)
+            Spacer(minLength: 1)
+            if active {
+                Image(systemName: "checkmark.circle.fill").font(.caption).foregroundStyle(.secondary).help(d("Active workspace"))
             }
-            .foregroundStyle(page == dest ? Color.accentColor : Color.primary)
-            .padding(.horizontal, 9).padding(.vertical, small ? 6 : 8)
-            .background(RoundedRectangle(cornerRadius: 7).fill(page == dest ? Color.accentColor.opacity(0.12) : .clear))
-            .contentShape(Rectangle())
-        }.buttonStyle(.plain)
-            .accessibilityValue(active ? d("Active workspace") : "")
-    }
-    var topBar: some View {
-        HStack(spacing: 11) {
-            if editor != nil {
-                iconButton("Back to overview", "chevron.left") {
-                    editor = nil; member = nil; pane = nil
-                }
+        }
+        .padding(.vertical, small ? 0 : 2)
+        .contentShape(Rectangle())
+        // Selecting a row only reports a change. Clicking the open workspace again re-applies it.
+        .simultaneousGesture(
+            TapGesture().onEnded {
+                if page == dest, case let .workspace(id) = dest { activateWorkspace(id) }
             }
-            Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-            TextField(d("Search workspaces, groups, windows"), text: $search)
-                .textFieldStyle(.plain).focused($searchFocused)
-                .background {
-                    Button("") { searchFocused = true }.keyboardShortcut("f", modifiers: .command).hidden()
-                }
-            if !search.isEmpty { iconButton("Clear search", "xmark.circle.fill") { search = "" } }
-            if model.busy { ProgressView().controlSize(.small) }
-            iconButton("Undo", "arrow.uturn.backward") { model.undo() }.disabled(!model.canUndo)
-            Divider().frame(height: 17)
-            iconButton("Inspector", "sidebar.right") { inspector.toggle() }
-        }.padding(.horizontal, 19).frame(height: 49)
+        )
+        .tag(dest)
+        .accessibilityValue(active ? d("Active workspace") : "")
     }
     func iconButton(_ name: String, _ symbol: String, action: @escaping () -> Void) -> some View {
         Button(action: action) { Image(systemName: symbol).frame(width: 19, height: 20).contentShape(Rectangle()) }
             .buttonStyle(.borderless).foregroundStyle(.secondary).help(d(name)).accessibilityLabel(d(name))
     }
     @ViewBuilder func workspaceMenu(_ w: Workspace) -> some View {
-        Button(d("Activate workspace")) { activateWorkspace(w.id) }.disabled(model.busy)
+        Button(d("Activate workspace")) { activateWorkspace(w.id) }.disabledWhileBusy()
         Button(d("Edit layout")) { openSpaceEditor(w) }
         Button(d("New window group")) { addGroup(w.id) }
         Divider()
@@ -306,8 +334,8 @@ struct Dashboard: View {
     }
     @ViewBuilder func groupMenu(_ g: DeskGroup) -> some View {
         Button(d("Edit layout")) { selectGroup(g, edit: true) }
-        Button(d("Focus group")) { focusGroup(g) }.disabled(g.memberIDs.isEmpty || model.busy)
-        Button(d("Apply layout")) { model.apply(g.id) }.disabled(g.memberIDs.isEmpty || model.busy)
+        Button(d("Focus group")) { focusGroup(g) }.disabledWhileBusy(or: g.memberIDs.isEmpty)
+        Button(d("Apply layout")) { model.apply(g.id) }.disabledWhileBusy(or: g.memberIDs.isEmpty)
         Button(d("Add windows")) { picker = DeskPickerRequest(group: g.id) }
         Divider()
         Button(d("Rename")) {
@@ -344,6 +372,65 @@ struct Dashboard: View {
             s.workspaces[dest].groups.append(moved)
         }
         if case .success = result { navigate(.workspace(w)) }
+    }
+}
+
+/// Disables its content while a command runs. A command sets `busy` twice, and reading it
+/// here instead of in the dashboard's body keeps that from re-evaluating the whole dashboard.
+private struct IdleOnly: ViewModifier {
+    @Environment(Workbench.self) private var model
+    let blocked: Bool
+    func body(content: Content) -> some View { content.disabled(blocked || model.busy) }
+}
+
+extension View {
+    func disabledWhileBusy(or blocked: Bool = false) -> some View { modifier(IdleOnly(blocked: blocked)) }
+}
+
+/// Undo is unavailable while a command runs, so its slot shows the progress instead of an
+/// extra toolbar item that would shift its neighbours.
+private struct DeskUndoButton: View {
+    @Environment(Workbench.self) private var model
+    var body: some View {
+        Button {
+            model.undo()
+        } label: {
+            ZStack {
+                Label(d("Undo"), systemImage: "arrow.uturn.backward").opacity(model.busy ? 0 : 1)
+                if model.busy { ProgressView().controlSize(.small) }
+            }
+        }.disabled(!model.canUndo).help(d("Undo"))
+    }
+}
+
+/// Lets ⌘F reach the toolbar search field where SwiftUI exposes its focus.
+private struct DeskSearchFocus: ViewModifier {
+    var focused: FocusState<Bool>.Binding
+    func body(content: Content) -> some View {
+        if #available(macOS 15, *) { content.searchFocused(focused) } else { content }
+    }
+}
+
+/// The shared surface of workspace and group cards, with a light response to the pointer.
+struct DeskCard: ViewModifier {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    let selected: Bool
+    let compact: Bool
+    let animated: Bool
+    @State private var hovering = false
+    func body(content: Content) -> some View {
+        let shape = RoundedRectangle(cornerRadius: 10, style: .continuous)
+        let lift = hovering && animated && !reduceMotion
+        content.padding(compact ? 8 : 11)
+            .background(Color(nsColor: .controlBackgroundColor), in: shape)
+            .overlay(
+                shape.strokeBorder(
+                    selected ? Color.accentColor : Color.secondary.opacity(hovering ? 0.4 : 0.2), lineWidth: selected ? 1.5 : 1)
+            )
+            .shadow(color: .black.opacity(hovering ? 0.13 : 0.04), radius: hovering ? 8 : 2, y: hovering ? 3 : 1)
+            .scaleEffect(lift ? 1.012 : 1)
+            .onHover { hovering = $0 }
+            .animation(animated && !reduceMotion ? .snappy(duration: 0.2) : nil, value: hovering)
     }
 }
 

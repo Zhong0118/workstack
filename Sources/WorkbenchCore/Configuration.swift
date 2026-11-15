@@ -46,7 +46,18 @@ public struct Preferences: Codable, Equatable, Sendable {
     public var tabPosition = "top"
     public var tabStyle: String?
     public var tabAutoHide = false
+    // Every v1 file carries `minimizeTabs: true` from the former default, so that key cannot tell
+    // a choice from a default. It stays in the file for older builds; the optional key is read.
     public var minimizeTabs = true
+    public var minimizeInactiveTabs: Bool?
+    /// Inactive tabs stay stacked behind the active one unless the user opts into minimizing them.
+    public var minimizesInactiveTabs: Bool {
+        get { minimizeInactiveTabs ?? false }
+        set {
+            minimizeInactiveTabs = newValue
+            minimizeTabs = newValue
+        }
+    }
     public var gap = 8.0
     public var snapRatios = true
     public var shortcutKey: UInt32 = 49

@@ -25,7 +25,7 @@ extension Dashboard {
                         Label(d("Layout"), systemImage: "rectangle.split.2x1")
                     }.fixedSize()
                     Button(d("Apply layout")) { model.apply(g.id) }.buttonStyle(.borderedProminent)
-                        .disabled(!model.trusted || model.busy || g.memberIDs.isEmpty)
+                        .disabledWhileBusy(or: !model.trusted || g.memberIDs.isEmpty)
                 }
                 if !model.trusted { permissionBanner }
                 let display = model.displays.first(where: { $0.id == g.displayID }) ?? model.displays.first
@@ -134,7 +134,7 @@ enum DeskPayload: Sendable {
 }
 
 @MainActor private struct DeskLayoutCanvas: View {
-    @EnvironmentObject var model: Workbench
+    @Environment(Workbench.self) var model
     let group: DeskGroup
     @Binding var selection: UUID?
     @Binding var member: UUID?
@@ -170,7 +170,7 @@ enum DeskPayload: Sendable {
                 RoundedRectangle(cornerRadius: 10).strokeBorder(Color.secondary.opacity(0.24))
                 if placements.isEmpty {
                     VStack(spacing: 9) {
-                        Image(systemName: "rectangle.badge.plus").font(.largeTitle).foregroundStyle(.blue)
+                        Image(systemName: "rectangle.badge.plus").font(.largeTitle).foregroundStyle(Color.accentColor)
                         Text(d("Drop a window here")).font(.headline)
                         Button(d("Choose window")) { add(nil) }
                     }.frame(width: max(0, bounds.width), height: max(0, bounds.height))
@@ -421,7 +421,7 @@ private struct DeskDivider: Identifiable {
 }
 
 private struct DeskReleaseTarget: View {
-    @EnvironmentObject var model: Workbench
+    @Environment(Workbench.self) var model
     let group: DeskGroup
     @State var targeted = false
     var body: some View {

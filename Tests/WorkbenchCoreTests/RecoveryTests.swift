@@ -5,6 +5,7 @@ import Testing
 @MainActor private final class FakeWindows: WindowControl {
     var windows: [UUID: LiveWindow] = [:]
     var fail: UUID?
+    var minimum: [UUID: CGSize] = [:]
     func add(stable: Bool = true, minimized: Bool = false) -> UUID {
         let id = UUID()
         let identity = WindowIdentity(
@@ -24,7 +25,11 @@ import Testing
     func focus(_ id: UUID) async throws { windows[id]?.focused = true }
     func setFrame(_ frame: CGRect, for id: UUID) async throws {
         if fail == id { throw ControlError.unavailable }
-        windows[id]?.frame = frame
+        var applied = frame
+        if let floor = minimum[id] {
+            applied.size = CGSize(width: max(frame.width, floor.width), height: max(frame.height, floor.height))
+        }
+        windows[id]?.frame = applied
     }
     func setMinimized(_ flag: Bool, for id: UUID) async throws { windows[id]?.minimized = flag }
 }
@@ -120,4 +125,33 @@ import Testing
     #expect(coord.journal == disk)
     #expect(sys.windows[managed]?.minimized == true && sys.windows[managed]?.frame == area)
     #expect(sys.windows[alreadyVisible]?.minimized == false)
+}
+
+@Test @MainActor func stackingIsBestEffortAndStaysRestorable() async throws {
+    let sys = FakeWindows(), front = sys.add(), stubborn = sys.add(), frozen = sys.add()
+    let original = CGRect(x: 300, y: 200, width: 1000, height: 800)
+    sys.windows[stubborn]?.frame = original
+    let target = CGRect(x: 0, y: 0, width: 800, height: 600)
+    let screen = CGRect(x: 0, y: 0, width: 2000, height: 2000)
+    sys.fail = frozen
+    let coord = WindowCoordinator(controller: sys, journal: RecoveryJournal()) { _ in }
+    let binding = [front: front, stubborn: stubborn, frozen: frozen]
+
+    // The same refusal aborts a visible placement.
+    await #expect(throws: ControlError.self) {
+        try await coord.perform([.place(frozen, target)], binding: binding, unique: [])
+    }
+    #expect(coord.journal.entries.isEmpty)
+
+    sys.minimum[stubborn] = CGSize(width: 900, height: 700)
+    let commands: [WindowCommand] = [.stack(stubborn, target), .stack(frozen, target), .place(front, target)]
+    try await coord.perform(commands, binding: binding, unique: [])
+    #expect(try await sys.read(front).frame == target)
+    // An untouched window leaves no lease. A partly resized one is leased where it settled.
+    #expect(coord.journal.entries[frozen] == nil)
+    let settled = try await sys.read(stubborn).frame
+    #expect(settled == CGRect(x: 0, y: 0, width: 900, height: 700))
+    #expect(coord.journal.entries[stubborn]?.expectedFrame == settled)
+    try await coord.restore(stubborn, runtime: stubborn, safeAreas: [screen])
+    #expect(try await sys.read(stubborn).frame == original && coord.journal.entries[stubborn] == nil)
 }

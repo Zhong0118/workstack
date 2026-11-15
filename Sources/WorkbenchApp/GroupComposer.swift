@@ -25,7 +25,7 @@ struct GroupComposerDraft {
 struct GroupComposer: View {
     let onCreated: (UUID) -> Void
     @State private var workspace: UUID
-    @EnvironmentObject var model: Workbench
+    @Environment(Workbench.self) var model
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var draft = GroupComposerDraft()

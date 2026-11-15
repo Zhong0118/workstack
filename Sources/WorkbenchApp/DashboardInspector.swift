@@ -7,55 +7,64 @@ extension Dashboard {
         return nil
     }
     var inspectorPanel: some View {
-        VStack(spacing: 0) {
-            HStack {
-                Text(d("Inspector")).font(.headline)
-                Spacer()
-                iconButton("Close inspector", "xmark") { inspector = false }
-            }.padding(.horizontal, 17).frame(height: 49)
-            Divider()
-            ScrollView {
-                VStack(alignment: .leading, spacing: 17) {
-                    if let member {
-                        windowInspector(member)
-                    } else if let g = group {
-                        groupInspector(g)
-                    } else if let w = inspectedWorkspace {
-                        inspectorTitle(w.name, icon: "rectangle.stack", type: "Workspace")
-                        Divider()
-                        info("Window groups", String(w.groups.count))
-                        info("Windows", String(w.groups.flatMap(\.memberIDs).count))
-                        if model.missingCount(in: w) > 0 { info("Missing windows", String(model.missingCount(in: w))) }
-                        if model.state.activeID == w.id {
-                            Label(d("Active workspace"), systemImage: "checkmark.circle").foregroundStyle(.blue)
-                        } else {
-                            Button(d("Activate workspace")) { activateWorkspace(w.id) }.disabled(model.busy)
-                        }
-                        Divider()
-                        Button {
-                            addGroup(w.id)
-                        } label: {
-                            Label(d("New window group"), systemImage: "plus")
-                        }
-                        Menu(d("Workspace actions")) { workspaceMenu(w) }
+        ScrollView {
+            VStack(alignment: .leading, spacing: 17) {
+                if let member {
+                    windowInspector(member)
+                } else if let g = group {
+                    groupInspector(g)
+                } else if let w = inspectedWorkspace {
+                    inspectorTitle(w.name, icon: "rectangle.stack", type: "Workspace")
+                    Divider()
+                    info("Window groups", String(w.groups.count))
+                    info("Windows", String(w.groups.flatMap(\.memberIDs).count))
+                    if model.missingCount(in: w) > 0 { info("Missing windows", String(model.missingCount(in: w))) }
+                    if model.state.activeID == w.id {
+                        Label(d("Active workspace"), systemImage: "checkmark.circle").foregroundStyle(Color.accentColor)
                     } else {
-                        inspectorTitle(d("Window details"), icon: "sidebar.right", type: "Inspector")
-                        Text(d("Select a window or group to inspect its properties.")).foregroundStyle(.secondary)
+                        Button(d("Activate workspace")) { activateWorkspace(w.id) }.disabledWhileBusy()
                     }
-                }.padding(17).frame(maxWidth: .infinity, alignment: .leading)
-            }
-            Divider()
+                    Divider()
+                    Button {
+                        addGroup(w.id)
+                    } label: {
+                        Label(d("New window group"), systemImage: "plus")
+                    }
+                    Menu(d("Workspace actions")) { workspaceMenu(w) }
+                } else {
+                    inspectorTitle(d("Window details"), icon: "sidebar.right", type: "Inspector")
+                    Text(d("Select a window or group to inspect its properties.")).foregroundStyle(.secondary)
+                }
+            }.padding(17).frame(maxWidth: .infinity, alignment: .leading)
+                // The inspector column reports the toolbar inset twice, which leaves a blank band
+                // above its content. Use the detail column's inset instead of the column's own.
+                .padding(.top, toolbarInset)
+        }
+        .ignoresSafeArea(.container, edges: .top)
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            VStack(spacing: 0) {
+                Divider()
+                Button {
+                    model.restore()
+                } label: {
+                    Label(d("Restore managed windows"), systemImage: "arrow.counterclockwise")
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }.buttonStyle(.borderless).padding(15)
+            }.background(Color(nsColor: .windowBackgroundColor))
+        }
+        .toolbar {
+            // Declared inside the inspector, the toggle sits above its column.
+            Spacer()
             Button {
-                model.restore()
+                inspector.toggle()
             } label: {
-                Label(d("Restore managed windows"), systemImage: "arrow.counterclockwise")
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }.buttonStyle(.borderless).padding(15)
-        }.background(Color(nsColor: .controlBackgroundColor))
+                Label(d("Inspector"), systemImage: "sidebar.right")
+            }.help(d("Inspector"))
+        }
     }
     func inspectorTitle(_ title: String, icon: String, type: String) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            Image(systemName: icon).font(.system(size: 23)).foregroundStyle(.blue)
+            Image(systemName: icon).font(.system(size: 23)).foregroundStyle(Color.accentColor)
             Text(d(type)).font(.caption).foregroundStyle(.secondary)
             Text(title).font(.title3.weight(.semibold)).textSelection(.enabled)
         }
@@ -73,7 +82,7 @@ extension Dashboard {
         info("Workspace", workspaces.first { $0.groups.contains(where: { $0.id == g.id }) }?.name ?? "—")
         info("Panes", String(g.root?.panes.count ?? 0))
         info("Windows", String(g.memberIDs.count))
-        Button(d("Add windows")) { picker = DeskPickerRequest(group: g.id) }.disabled(model.busy)
+        Button(d("Add windows")) { picker = DeskPickerRequest(group: g.id) }.disabledWhileBusy()
         Picker(
             d("Display"),
             selection: Binding(
@@ -102,13 +111,13 @@ extension Dashboard {
                 Label(d("Edit layout"), systemImage: "slider.horizontal.3")
             }
         }
-        Button(d("Focus group")) { focusGroup(g) }.disabled(g.memberIDs.isEmpty || model.busy)
+        Button(d("Focus group")) { focusGroup(g) }.disabledWhileBusy(or: g.memberIDs.isEmpty)
         Button {
             model.apply(g.id)
         } label: {
             Label(d("Apply layout"), systemImage: "rectangle.on.rectangle")
         }
-        .disabled(!model.trusted || g.memberIDs.isEmpty || model.busy)
+        .disabledWhileBusy(or: !model.trusted || g.memberIDs.isEmpty)
         if !g.memberIDs.isEmpty {
             Divider()
             Text(d("Members")).font(.headline)
@@ -161,8 +170,8 @@ extension Dashboard {
             if let g = group {
                 Button(d("Reconnect window")) { picker = DeskPickerRequest(group: g.id, rebind: id) }
                 if let bundle = model.state.identities[id]?.bundleID, !bundle.isEmpty {
-                    Button(d("Open application…")) { launchRequest = DeskLaunchRequest(id: id, bundleID: bundle) }.disabled(
-                        model.busy)
+                    Button(d("Open application…")) { launchRequest = DeskLaunchRequest(id: id, bundleID: bundle) }
+                        .disabledWhileBusy()
                 }
             }
         }
@@ -173,7 +182,7 @@ extension Dashboard {
             info("Mode", d(g.floating.contains(id) ? "Floating" : "Tiled"))
             Button(d("Edit layout")) { selectGroup(g, edit: true) }
             if let w = live, w.kind == .normal, !w.fullscreen { moveMemberMenu(id, owner: g.id) }
-            Button(d("Release from group")) { releaseMember(id) }.disabled(model.busy)
+            Button(d("Release from group")) { releaseMember(id) }.disabledWhileBusy()
         }
         if live != nil {
             Button(d("Focus window")) { focusMember(id) }
@@ -200,7 +209,7 @@ extension Dashboard {
                     }
                 }
             }
-        }.disabled(model.busy || !allGroups.contains(where: { $0.id != owner }))
+        }.disabledWhileBusy(or: !allGroups.contains(where: { $0.id != owner }))
     }
     func focusMember(_ id: UUID) {
         if let g = allGroups.first(where: { $0.root?.panes.contains(where: { $0.tabs.contains(id) }) == true }) {
@@ -247,7 +256,7 @@ extension Dashboard {
             }.disabled(allGroups.isEmpty)
         }
         if owner != nil {
-            Button(d("Release from group")) { releaseMember(id) }.disabled(model.busy)
+            Button(d("Release from group")) { releaseMember(id) }.disabledWhileBusy()
         }
         if w != nil {
             Divider()
@@ -262,7 +271,7 @@ extension Dashboard {
 }
 
 struct DeskIcon: View {
-    @EnvironmentObject var model: Workbench
+    @Environment(Workbench.self) var model
     let id: UUID
     let size: CGFloat
     var body: some View {
@@ -339,7 +348,7 @@ struct DeskWindowList: View {
                             if w.minimized || w.fullscreen {
                                 Text(d(w.fullscreen ? "Full screen" : "Minimized")).font(.caption).foregroundStyle(.secondary)
                             }
-                            if selected == w.id { Image(systemName: "checkmark.circle.fill").foregroundStyle(.blue) }
+                            if selected == w.id { Image(systemName: "checkmark.circle.fill").foregroundStyle(Color.accentColor) }
                         }.padding(8).contentShape(Rectangle())
                             .background(
                                 selected == w.id ? Color.accentColor.opacity(0.1) : .clear, in: RoundedRectangle(cornerRadius: 7))
@@ -363,7 +372,7 @@ struct DeskWindowList: View {
 }
 
 struct DeskPicker: View {
-    @EnvironmentObject var model: Workbench
+    @Environment(Workbench.self) var model
     @Environment(\.dismiss) var dismiss
     let request: DeskPickerRequest
     @State var selection: UUID?

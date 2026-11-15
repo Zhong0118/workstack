@@ -90,10 +90,16 @@ final class ProcessWindows: @unchecked Sendable {
         var value: AXObserver?
         let result = AXObserverCreate(
             info.pid,
-            { _, _, _, context in
+            { _, _, event, context in
                 guard let context else { return }
-                let pid = Int(bitPattern: context)
-                NotificationCenter.default.post(name: .workbenchAXEvent, object: NSNumber(value: pid))
+                let pid = NSNumber(value: Int(bitPattern: context))
+                NotificationCenter.default.post(name: .workbenchAXEvent, object: pid)
+                // The coalesced scan publishes a new frame about 135 ms later. Overlays attached
+                // to a window need to know at once that it started moving.
+                let name = event as String
+                if name == kAXMovedNotification || name == kAXResizedNotification {
+                    NotificationCenter.default.post(name: .workbenchAXMotion, object: pid)
+                }
             }, &value)
         guard result == .success, let value else { return }
         observer = value
@@ -309,4 +315,5 @@ final class ProcessWindows: @unchecked Sendable {
 
 extension Notification.Name {
     static let workbenchAXEvent = Notification.Name("workstack.remoteWindowEvent")
+    static let workbenchAXMotion = Notification.Name("workstack.remoteWindowMotion")
 }
