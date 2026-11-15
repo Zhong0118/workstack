@@ -19,8 +19,6 @@
 "Cancel" = "取消";
 "Center" = "居中";
 "Choose window" = "选择窗口";
-"Clear search" = "清除搜索";
-"Close inspector" = "关闭检查器";
 "Connect your Mac windows" = "连接 Mac 上的窗口";
 "Create assignment rule" = "创建自动归组规则";
 "Create window group" = "创建窗口组";
@@ -149,9 +147,6 @@
 "Movement" = "移动";
 "Fixed position" = "固定位置";
 "Movable" = "可移动";
-"Recovery" = "恢复";
-"Manual reconnection" = "手动重新关联";
-"Identity available" = "可匹配窗口标识";
 "Focus group" = "聚焦窗口组";
 "missing" = "个窗口待关联";
 "Missing windows" = "待关联的窗口";
