@@ -206,7 +206,9 @@ struct WorkbenchSettings: View {
                     }))
             Text(tr("Window titles stay on this Mac. Previews are requested only when opened.")).font(.caption)
         case .about:
-            LabeledContent("workstack", value: "0.1.0")
+            // The packaged app's Info.plist is the one place the version is written.
+            LabeledContent(
+                "workstack", value: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "—")
             Text(tr("Native window workspaces for macOS"))
             Text(tr("Built with Apple system frameworks. No third-party runtime dependencies."))
         }
