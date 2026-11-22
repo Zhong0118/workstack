@@ -1,4 +1,5 @@
 import Foundation
+import Observation
 
 @MainActor
 public protocol WindowControl: AnyObject {
@@ -11,7 +12,7 @@ public protocol WindowControl: AnyObject {
 
 public enum WindowCommand: Sendable {
     case place(UUID, CGRect)
-    /// Best-effort `place` for a tab hidden behind the active one. A refusal never fails the transaction.
+    /// Best-effort geometry for stacked tabs. Focus and recovery writes still require confirmation.
     case stack(UUID, CGRect)
     case conceal(UUID)
     case reveal(UUID)
@@ -30,10 +31,10 @@ public enum WindowCommand: Sendable {
 public enum ControlError: Error { case unavailable, unexpectedFrame, recoveryRequired }
 
 /// The caller serializes transactions. The on-disk lease precedes each reversible AX write.
-@MainActor
+@MainActor @Observable
 public final class WindowCoordinator {
     public private(set) var journal: RecoveryJournal
-    public private(set) var lastAttempt: WindowCommand?
+    @ObservationIgnored public private(set) var lastAttempt: WindowCommand?
     private let controller: any WindowControl
     private let persist: (RecoveryJournal) throws -> Void
     public init(controller: any WindowControl, journal: RecoveryJournal, persist: @escaping (RecoveryJournal) throws -> Void) {
@@ -63,19 +64,26 @@ public final class WindowCoordinator {
             for command in commands {
                 lastAttempt = command
                 let member = command.member
-                if case .restore = command, journal.entries[member] == nil { continue }
+                let previous = journal.entries[member]
+                if case .restore = command, previous == nil { continue }
+                if case .reveal = command, previous?.minimizedByUs != true { continue }
                 guard let runtime = binding[member] else {
                     if case .raise = command { throw ControlError.unavailable }
                     continue
                 }
-                let live = try await controller.read(runtime)
+                let live: LiveWindow
+                do {
+                    live = try await controller.read(runtime)
+                } catch {
+                    if case .stack = command { continue }
+                    throw error
+                }
                 guard live.kind == .normal, !live.fullscreen else {
                     switch command {
                     case .raise, .restore: throw ControlError.unavailable
                     default: continue
                     }
                 }
-                let previous = journal.entries[member]
                 guard previous == nil || previous?.identity == live.identity else { throw ControlError.recoveryRequired }
                 var lease = previous ?? WindowLease(identity: live.identity)
                 switch command {
@@ -90,17 +98,19 @@ public final class WindowCoordinator {
                         let actual = try await controller.read(runtime)
                         guard actual.frame.roughlyEquals(target, tolerance: 3) else { throw ControlError.unexpectedFrame }
                     } catch {
-                        guard case .stack = command else { throw error }
-                        // A hidden tab that refuses the pane's size must not undo the visible layout.
-                        // Lease whatever frame it settled on so it can still be restored.
-                        guard let settled = try? await controller.read(runtime) else { continue }
-                        if settled.frame.roughlyEquals(live.frame) {
-                            before.removeLast()
-                            try record(previous, for: member)
-                        } else {
-                            lease.expectedFrame = settled.frame
-                            try record(lease, for: member)
+                        let stacking: Bool = if case .stack = command { true } else { false }
+                        if let settled = try? await controller.read(runtime), settled.identity == live.identity {
+                            if settled.frame.roughlyEquals(live.frame) {
+                                before.removeLast()
+                                try record(previous, for: member)
+                            } else if stacking || settled.frame.isSizeClamp(from: live.frame, toward: target) {
+                                // Both the immediate rollback and a later restore need the accepted size.
+                                before[before.count - 1].command = .place(member, settled.frame)
+                                lease.expectedFrame = settled.frame
+                                try record(lease, for: member)
+                            }
                         }
+                        if !stacking { throw error }
                     }
                 case .conceal:
                     guard live.minimizable, !live.minimized, unique.contains(member), live.identity.permitsRecovery else {
@@ -220,4 +230,15 @@ public final class WindowCoordinator {
 private func intersectionArea(_ a: CGRect, _ b: CGRect) -> CGFloat {
     let i = a.intersection(b)
     return i.isNull ? 0 : i.width * i.height
+}
+
+private extension CGRect {
+    /// Attribute a constrained resize only at the requested origin and within the attempted size change.
+    func isSizeClamp(from original: CGRect, toward target: CGRect) -> Bool {
+        func between(_ actual: CGFloat, _ old: CGFloat, _ requested: CGFloat) -> Bool {
+            actual >= min(old, requested) - 3 && actual <= max(old, requested) + 3
+        }
+        return abs(minX - target.minX) <= 3 && abs(minY - target.minY) <= 3
+            && between(width, original.width, target.width) && between(height, original.height, target.height)
+    }
 }

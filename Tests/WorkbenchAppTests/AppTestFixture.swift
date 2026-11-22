@@ -3,6 +3,7 @@ import WorkbenchCore
 
 @MainActor final class AppTestWindows: WindowControl {
     var windows: [UUID: LiveWindow] = [:]
+    var minimumSizes: [UUID: CGSize] = [:]
     var failFocus: UUID?
     var failMinimize: UUID?
     var focusedIDs: [UUID] = []
@@ -29,7 +30,13 @@ import WorkbenchCore
         for key in windows.keys { windows[key]?.focused = key == id }
         focusedIDs.append(id)
     }
-    func setFrame(_ frame: CGRect, for id: UUID) async throws { windows[id]?.frame = frame }
+    func setFrame(_ frame: CGRect, for id: UUID) async throws {
+        var applied = frame
+        if let minimum = minimumSizes[id] {
+            applied.size = CGSize(width: max(frame.width, minimum.width), height: max(frame.height, minimum.height))
+        }
+        windows[id]?.frame = applied
+    }
     func setMinimized(_ flag: Bool, for id: UUID) async throws {
         if failMinimize == id { throw ControlError.unavailable }
         windows[id]?.minimized = flag

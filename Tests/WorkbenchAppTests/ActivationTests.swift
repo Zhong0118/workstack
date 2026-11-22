@@ -216,3 +216,62 @@ private func sampleWindow() -> LiveWindow {
     motion.observe(pane, at: start + .seconds(2))
     #expect(motion.unsettled(at: start + .seconds(2) + .milliseconds(150)) != nil)
 }
+
+@Test @MainActor func selectingTabAcrossWorkspacesRespectsFocusMode() async throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let system = AppTestWindows(), first = system.add(), second = system.add()
+    let model = Workbench(directory: directory, controller: system)
+    model.update(Array(system.windows.values), permission: true, screens: [AppTestWindows.screen])
+    let group = WindowGroup(name: "Tabs", root: .pane(id: UUID(), tabs: [first, second], active: first))
+    let target = Workspace(name: "Target", groups: [group])
+    try model.change {
+        $0.workspaces.append(target)
+        $0.prefs.switchMode = .focus
+        $0.prefs.minimizesInactiveTabs = true
+    }.get()
+    let frame = system.windows[second]?.frame
+    model.focus(second)
+    while model.busy { await Task.yield() }
+    #expect(model.state.activeID == target.id && system.focusedIDs.last == second)
+    #expect(system.windows[second]?.frame == frame)
+    #expect(system.windows[first]?.minimized == false)
+    #expect(model.journalCount == 0)
+}
+
+@Test @MainActor func keyboardTabSwitchSkipsManuallyMinimizedWindows() async throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let system = AppTestWindows(), first = system.add(), minimized = system.add(minimized: true), last = system.add()
+    let model = Workbench(directory: directory, controller: system)
+    model.update(Array(system.windows.values), permission: true, screens: [AppTestWindows.screen])
+    let group = WindowGroup(name: "Tabs", root: .pane(id: UUID(), tabs: [first, minimized, last], active: first))
+    try model.change { $0.workspaces[0].groups = [group] }.get()
+    model.stepTab(1)
+    while model.busy { await Task.yield() }
+    #expect(system.focusedIDs.last == last)
+    model.stepTab(-1)
+    while model.busy { await Task.yield() }
+    #expect(system.focusedIDs.last == first)
+    #expect(system.windows[minimized]?.minimized == true)
+}
+
+@Test @MainActor func selectingClampedStackedTabStillFocusesIt() async throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let system = AppTestWindows(), first = system.add(), constrained = system.add()
+    system.minimumSizes[constrained] = CGSize(width: 1400, height: 500)
+    system.windows[constrained]?.frame.size = CGSize(width: 1500, height: 900)
+    let model = Workbench(directory: directory, controller: system)
+    model.update(Array(system.windows.values), permission: true, screens: [AppTestWindows.screen])
+    let group = WindowGroup(name: "Tabs", root: .pane(id: UUID(), tabs: [first, constrained], active: first))
+    try model.change { $0.workspaces[0].groups = [group] }.get()
+    model.apply(group.id)
+    while model.busy { await Task.yield() }
+    model.update(Array(system.windows.values), permission: true, screens: [AppTestWindows.screen])
+    model.selectTab(constrained, group: group.id)
+    while model.busy { await Task.yield() }
+    #expect(model.failedOperations == 0)
+    #expect(system.focusedIDs.last == constrained)
+    #expect(model.groupList.first?.root?.panes.first?.active == constrained)
+}

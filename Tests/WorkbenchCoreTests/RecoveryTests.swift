@@ -155,3 +155,45 @@ import Testing
     try await coord.restore(stubborn, runtime: stubborn, safeAreas: [screen])
     #expect(try await sys.read(stubborn).frame == original && coord.journal.entries[stubborn] == nil)
 }
+
+@Test @MainActor func failedCommitRollsBackClampedBackgroundTab() async throws {
+    let sys = FakeWindows(), id = sys.add()
+    let original = CGRect(x: 300, y: 200, width: 1000, height: 800)
+    sys.windows[id]?.frame = original
+    sys.minimum[id] = CGSize(width: 900, height: 700)
+    var disk = RecoveryJournal()
+    let coord = WindowCoordinator(controller: sys, journal: disk) { disk = $0 }
+    let target = CGRect(x: 0, y: 0, width: 800, height: 600)
+    await #expect(throws: StorageError.self) {
+        try await coord.perform([.stack(id, target)], binding: [id: id], unique: []) {
+            throw StorageError.invalidConfiguration
+        }
+    }
+    #expect(try await sys.read(id).frame == original)
+    #expect(disk.entries.isEmpty)
+}
+
+@Test @MainActor func closedBackgroundTabDoesNotBlockLiveTarget() async throws {
+    let sys = FakeWindows(), active = sys.add(), closed = UUID()
+    let coord = WindowCoordinator(controller: sys, journal: RecoveryJournal()) { _ in }
+    let target = CGRect(x: 0, y: 0, width: 800, height: 600)
+    try await coord.perform(
+        [.reveal(closed), .stack(closed, target), .raise(active)], binding: [closed: closed, active: active], unique: [])
+    #expect(try await sys.read(active).focused)
+    #expect(coord.journal.entries.isEmpty)
+}
+
+@Test @MainActor func clampedVisiblePlacementRestoresOriginalFrameBeforeReturningFailure() async throws {
+    let sys = FakeWindows(), id = sys.add()
+    let original = CGRect(x: 300, y: 200, width: 1000, height: 800)
+    sys.windows[id]?.frame = original
+    sys.minimum[id] = CGSize(width: 900, height: 700)
+    let target = CGRect(x: 0, y: 0, width: 800, height: 600)
+    var disk = RecoveryJournal()
+    let coord = WindowCoordinator(controller: sys, journal: disk) { disk = $0 }
+    await #expect(throws: ControlError.self) {
+        try await coord.perform([.place(id, target)], binding: [id: id], unique: [])
+    }
+    #expect(try await sys.read(id).frame == original)
+    #expect(disk.entries.isEmpty)
+}

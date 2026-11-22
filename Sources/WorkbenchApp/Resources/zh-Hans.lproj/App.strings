@@ -57,6 +57,7 @@
 "Title contains (optional)" = "窗口标题包含（可选）";
 "Top" = "顶部";
 "Unavailable window" = "未连接的窗口";
+"Check the window state in its application." = "此窗口当前无法切换，请在原应用中检查窗口状态。";
 "Undo workspace change" = "撤销工作区更改";
 "Unmatched windows were left untouched." = "无法确认身份的窗口已保留原状";
 "Window group" = "窗口组";

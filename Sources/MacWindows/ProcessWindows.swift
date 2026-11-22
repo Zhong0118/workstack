@@ -35,6 +35,12 @@ final class ProcessWindows: @unchecked Sendable {
     func suspend(_ value: Bool) {
         lock.withLock { suspended = value }
     }
+
+    // The observer callback runs on the main run loop. Resolve its AX object from
+    // the last scan without waiting for another AX request on the process queue.
+    func windowID(for element: Element) -> UUID? {
+        lock.withLock { ids[element] }
+    }
     private static let fields = [
         kAXTitleAttribute, kAXSubroleAttribute, kAXRoleAttribute, kAXPositionAttribute,
         kAXSizeAttribute, kAXMinimizedAttribute, "AXFullScreen", kAXIdentifierAttribute,
@@ -90,7 +96,7 @@ final class ProcessWindows: @unchecked Sendable {
         var value: AXObserver?
         let result = AXObserverCreate(
             info.pid,
-            { _, _, event, context in
+            { _, element, event, context in
                 guard let context else { return }
                 let pid = NSNumber(value: Int(bitPattern: context))
                 NotificationCenter.default.post(name: .workbenchAXEvent, object: pid)
@@ -98,7 +104,8 @@ final class ProcessWindows: @unchecked Sendable {
                 // to a window need to know at once that it started moving.
                 let name = event as String
                 if name == kAXMovedNotification || name == kAXResizedNotification {
-                    NotificationCenter.default.post(name: .workbenchAXMotion, object: pid)
+                    NotificationCenter.default.post(
+                        name: .workbenchAXMotion, object: pid, userInfo: ["element": Element(raw: element)])
                 }
             }, &value)
         guard result == .success, let value else { return }
@@ -130,7 +137,7 @@ final class ProcessWindows: @unchecked Sendable {
             try checkActive()
             let element = Element(raw: raw)
             guard current[element] == nil else { continue }
-            let id = ids[element] ?? UUID()
+            let id = windowID(for: element) ?? UUID()
             do {
                 try checkAX(AXUIElementSetMessagingTimeout(raw, 0.24))
                 guard let window = try snapshot(element, id: id, focused: focus, reading: false) else { continue }
@@ -168,7 +175,7 @@ final class ProcessWindows: @unchecked Sendable {
             && recoveryMatches(result[i].id, identifier: result[i].identity.identifier)
         { result[i].kind = .normal }
         managedMinimized.formIntersection(current.values)
-        ids = current
+        lock.withLock { ids = current }
         elements = Dictionary(uniqueKeysWithValues: current.map { ($1, $0) })
         observed.formIntersection(current.keys)
         let order = Dictionary(uniqueKeysWithValues: publishedOrder.enumerated().map { ($1, $0) })

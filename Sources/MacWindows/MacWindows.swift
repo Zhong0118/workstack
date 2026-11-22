@@ -4,8 +4,8 @@ import WorkbenchCore
 
 @MainActor public final class MacWindows: WindowControl {
     public var onChange: (([LiveWindow]) -> Void)?
-    /// Called as soon as a window of the process reports a move or resize, ahead of `onChange`.
-    public var onMotion: ((pid_t) -> Void)?
+    /// Reports the moving window's runtime ID, ahead of the coalesced frame snapshot.
+    public var onMotion: ((UUID) -> Void)?
     public var trusted: Bool { AXIsProcessTrusted() }
     private var workers: [pid_t: ProcessWindows] = [:]
     private var snapshots: [pid_t: [LiveWindow]] = [:]
@@ -97,12 +97,13 @@ import WorkbenchCore
             let app = event.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
             let pid = (event.object as? NSNumber)?.int32Value ?? app?.processIdentifier
             let launched = app?.launchDate
-            MainActor.assumeIsolated { self?.handle(name, pid: pid, launched: launched) }
+            let element = event.userInfo?["element"] as? Element
+            MainActor.assumeIsolated { self?.handle(name, pid: pid, launched: launched, element: element) }
         }
         subscriptions.append((center, token))
     }
 
-    private func handle(_ name: Notification.Name, pid: pid_t?, launched: Date?) {
+    private func handle(_ name: Notification.Name, pid: pid_t?, launched: Date?, element: Element?) {
         guard running else { return }
         switch name {
         case NSWorkspace.willSleepNotification, NSWorkspace.screensDidSleepNotification,
@@ -126,7 +127,7 @@ import WorkbenchCore
         case .workbenchAXEvent:
             if let pid { schedule(pid) }
         case .workbenchAXMotion:
-            if let pid, !sleeping { onMotion?(pid) }
+            if !sleeping, let pid, let element, let id = workers[pid]?.windowID(for: element) { onMotion?(id) }
         default:
             guard let pid else { return }
             if name == NSWorkspace.didTerminateApplicationNotification {

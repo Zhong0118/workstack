@@ -159,7 +159,7 @@ struct Dashboard: View {
         guard !model.busy else { return }
         // Show the workspace at once. Arranging its windows can take a second, and a
         // failed activation leaves its page open with the button to try again.
-        if page != .workspace(id) { navigate(.workspace(id)) }
+        navigate(.workspace(id))
         model.activate(id)
     }
     func focusSearch() {

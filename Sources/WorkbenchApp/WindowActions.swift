@@ -112,8 +112,7 @@ extension Workbench {
         let document = document ?? state
         let live = supplied ?? Dictionary(uniqueKeysWithValues: windows.map { ($0.id, $0) })
         func available(_ id: UUID) -> Bool {
-            guard let w = live[id], w.kind == .normal, !w.fullscreen else { return false }
-            return !w.minimized || coordinator.journal.entries[id]?.minimizedByUs == true
+            live[id].map(canFocus) ?? false
         }
         var result = [WindowCommand]()
         var visible = [UUID]()
@@ -232,8 +231,11 @@ extension Workbench {
         guard let w = windows.first(where: { $0.id == member }) else {
             reportFailure(WindowAccessError.unavailable); return
         }
-        guard !w.fullscreen, w.kind == .normal, !w.minimized || coordinator.journal.entries[member]?.minimizedByUs == true
-        else { notice = "此窗口当前不可切换，请先在原应用中恢复窗口。"; return }
+        guard canFocus(w) else {
+            notice = "此窗口当前不可切换，请先在原应用中恢复窗口。"
+            noticeIsFailure = true
+            return
+        }
         var ws = state.workspaces[wi]
         ws.groups[gi].activate(member)
         let switching = state.activeID != ws.id
@@ -247,12 +249,15 @@ extension Workbench {
                     cmds += (self.activeWorkspace?.groups.flatMap(\.memberIDs) ?? []).filter(self.canSafelyMinimize).map(
                         WindowCommand.conceal)
                 }
-                cmds += self.plannedCommands(for: ws.groups, peers: ws.groups, mode: .arrange, preferred: member)
+                cmds += self.plannedCommands(for: ws.groups, peers: ws.groups, mode: self.state.prefs.switchMode, preferred: member)
                 next.recent.removeAll { $0 == ws.id }
                 next.recent.insert(ws.id, at: 0)
             } else {
                 cmds.append(.reveal(member))
-                if let previous, previous.id != member { cmds.append(.place(member, previous.frame)) }
+                if let previous, previous.id != member {
+                    // A window with a larger minimum size can still take keyboard focus.
+                    cmds.append(.stack(member, previous.frame))
+                }
                 for id in pane.tabs where id != member && self.bindings[id] != nil {
                     if self.state.prefs.minimizesInactiveTabs && self.canSafelyMinimize(id) {
                         cmds.append(.conceal(id))
@@ -278,10 +283,17 @@ extension Workbench {
             let pane = g.root?.panes.first(where: { pane in windows.contains { $0.focused && pane.tabs.contains($0.id) } })
                 ?? g.root?.panes.first(where: { $0.tabs.count > 1 })
         else { return }
-        let ids = pane.tabs.filter { bindings[$0] != nil }
-        guard !ids.isEmpty else { return }
-        let i = pane.active.flatMap { ids.firstIndex(of: $0) } ?? 0
-        selectTab(ids[(i + direction + ids.count) % ids.count], group: g.id)
+        guard !pane.tabs.isEmpty else { return }
+        let eligible = Set(windows.filter(canFocus).map(\.id))
+        let start = pane.active.flatMap { pane.tabs.firstIndex(of: $0) } ?? (direction > 0 ? -1 : 0)
+        for step in 1...pane.tabs.count {
+            let index = (start + step * direction + pane.tabs.count) % pane.tabs.count
+            let candidate = pane.tabs[index]
+            if eligible.contains(candidate) {
+                selectTab(candidate, group: g.id)
+                return
+            }
+        }
     }
     func finish() async {
         terminating = true

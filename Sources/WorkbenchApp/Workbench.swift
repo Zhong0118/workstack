@@ -99,7 +99,7 @@ final class Workbench {
         }
         configureShortcut()
         backend.onChange = { [weak self] snapshot in self?.update(snapshot) }
-        backend.onMotion = { [weak self] pid in self?.panelManager?.windowMoved(pid: pid) }
+        backend.onMotion = { [weak self] runtime in self?.panelManager?.windowMoved(runtime) }
         authorizeRecovery()
         backend.start()
         refresh()

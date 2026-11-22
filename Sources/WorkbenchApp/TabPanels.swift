@@ -52,7 +52,7 @@ final class TabPanels {
     private var contents: [UUID: String] = [:]
     private var expanded: Set<UUID> = []
     private var motion: [UUID: StripMotion] = [:]
-    private var owners: [UUID: pid_t] = [:]
+    private var owners: [UUID: UUID] = [:]
     private var shown: Set<UUID> = []
     private var holdUntil: ContinuousClock.Instant?
     private var wake: (at: ContinuousClock.Instant, task: Task<Void, Never>)?
@@ -78,12 +78,12 @@ final class TabPanels {
 
     /// A move or resize event precedes the snapshot carrying the new frame. Detaching on the
     /// event keeps the strip from hanging behind a window that already left.
-    func windowMoved(pid: pid_t) {
+    func windowMoved(_ runtime: UUID) {
         let now = ContinuousClock.now
         // Our own layout commands, and the focus changes around them, are judged from snapshots.
         guard !model.busy, holdUntil.map({ now >= $0 }) ?? true else { return }
         var attached = false
-        for (id, owner) in owners where owner == pid {
+        for (id, owner) in owners where owner == runtime {
             motion[id, default: StripMotion()].nudge(at: now)
             attached = attached || shown.contains(id)
         }
@@ -104,7 +104,7 @@ final class TabPanels {
             for p in g.root?.panes ?? [] where p.tabs.count > 1 {
                 kept.insert(p.id)
                 let active = model.windows.first { $0.id == p.active && !$0.minimized && !$0.fullscreen }
-                owners[p.id] = active?.identity.pid
+                owners[p.id] = active.flatMap { model.bindings[$0.id] }
                 if let active { motion[p.id, default: StripMotion()].observe(active.frame, at: now) }
                 guard model.trusted, !NSApp.isActive, g.zoomedPane == nil || g.zoomedPane == p.id, let w = active else {
                     hide(p.id, over: Self.fadeOut)
@@ -254,6 +254,8 @@ private struct TabStrip: View {
                 ScrollView(.horizontal) {
                     HStack(spacing: 3) {
                         ForEach(Array(pane.tabs.enumerated()), id: \.element) { index, id in
+                            let window = model.windows.first { $0.id == id }
+                            let canSelect = window.map(model.canFocus) ?? false
                             Button {
                                 model.selectTab(id, group: group)
                                 // Answer the press at once. A failed switch slides the highlight back.
@@ -271,7 +273,12 @@ private struct TabStrip: View {
                                     }
                                 }
                                 .contentShape(Rectangle())
-                            }.buttonStyle(.plain).disabled(model.busy || model.bindings[id] == nil)
+                            }.buttonStyle(.plain).disabled(model.busy || !canSelect)
+                                .help(
+                                    canSelect
+                                        ? model.displayName(id)
+                                        : tr(window == nil ? "Unavailable window" : "Check the window state in its application.")
+                                )
                                 .accessibilityIdentifier("workstack.tab.\(id.uuidString)")
                                 .accessibilityAddTraits(id == pane.active ? .isSelected : [])
                                 .onDrag { DeskPayload.window(id).provider }

@@ -306,6 +306,19 @@ import WorkbenchCore
             }
         }
         print("integration_step=strip_follows_window passed")
+        // The other window in this process occupies its own pane. Its movement must
+        // leave the focused tab's strip continuously available.
+        guard let sideRuntime = model.bindings[side] else { throw Failure("side window missing") }
+        let priorPresentations = model.panelManager?.presentations
+        for frame in [sidePane.frame.offsetBy(dx: -32, dy: 24), sidePane.frame] {
+            try await model.backend.setFrame(frame, for: sideRuntime)
+            try await wait("side window published") { fixtures().first { $0.id == side }?.frame.roughlyEquals(frame) == true }
+            try await Task.sleep(for: StripMotion.settle + .milliseconds(100))
+            try require(
+                strip(on: selected.frame) && model.panelManager?.presentations == priorPresentations,
+                "moving a sibling detached the focused tab strip")
+        }
+        print("integration_step=strip_ignores_sibling_motion passed")
         if ProcessInfo.processInfo.environment["WW_MEASURE"] == "1" {
             try await IntegrationTiming.measure(
                 "tab_stacked", action: { model.selectTab($0.isMultiple(of: 2) ? tabB : tabA, group: group) },

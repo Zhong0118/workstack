@@ -23,6 +23,18 @@ private enum SettingsPage: String, CaseIterable, Identifiable {
     }
 }
 
+/// Pointer drags finish on release; keyboard and accessibility edits finish after an idle interval.
+struct LayoutGapEdit {
+    var value: Double?
+    var dragging = false
+    var keyboardValue: Double? { dragging ? nil : value }
+
+    mutating func finish() -> Double? {
+        defer { self = Self() }
+        return value
+    }
+}
+
 struct WorkbenchSettings: View {
     @Environment(Workbench.self) var model
     @State private var page = SettingsPage.general
@@ -35,11 +47,10 @@ struct WorkbenchSettings: View {
     @State private var target: UUID?
     @State private var status = ""
     @State private var reset = false
-    @State private var gapDraft: Double?
+    @State private var gap = LayoutGapEdit()
 
     private func commitGap() {
-        guard let value = gapDraft else { return }
-        gapDraft = nil
+        guard let value = gap.finish() else { return }
         model.change { $0.prefs.gap = value }
     }
     func pref<T>(_ key: WritableKeyPath<Preferences, T>) -> Binding<T> {
@@ -69,12 +80,6 @@ struct WorkbenchSettings: View {
                 }
             }
         }.frame(width: 690, height: 490)
-            // Keyboard and accessibility adjustments never report the end of editing.
-            .task(id: gapDraft) {
-                guard gapDraft != nil else { return }
-                try? await Task.sleep(for: .milliseconds(300))
-                if !Task.isCancelled { commitGap() }
-            }
             .onAppear {
                 login = SMAppService.mainApp.status == .enabled
                 captureGranted = CGPreflightScreenCaptureAccess()
@@ -132,10 +137,20 @@ struct WorkbenchSettings: View {
         case .layouts:
             // Dragging previews locally and saves once, so one drag is one undo step and one file write.
             Slider(
-                value: Binding(get: { gapDraft ?? model.state.prefs.gap }, set: { gapDraft = $0 }), in: 0...32, step: 1,
+                value: Binding(get: { gap.value ?? model.state.prefs.gap }, set: { gap.value = $0 }), in: 0...32, step: 1,
                 label: { Text(tr("Gap")) }, minimumValueLabel: { Text("0") },
-                maximumValueLabel: { Text("\(Int(gapDraft ?? model.state.prefs.gap)) 点") },
-                onEditingChanged: { editing in if !editing { commitGap() } })
+                maximumValueLabel: { Text("\(Int(gap.value ?? model.state.prefs.gap)) 点") },
+                onEditingChanged: { editing in
+                    gap.dragging = editing
+                    if !editing { commitGap() }
+                }
+            )
+            .task(id: gap.keyboardValue) {
+                guard gap.keyboardValue != nil else { return }
+                try? await Task.sleep(for: .milliseconds(300))
+                if !Task.isCancelled, gap.keyboardValue != nil { commitGap() }
+            }
+            .onDisappear(perform: commitGap)
             Toggle(tr("Snap dividers to common ratios"), isOn: pref(\.snapRatios))
             LabeledContent(tr("Saved layouts"), value: "\(model.state.templates.count)")
         case .shortcuts:
