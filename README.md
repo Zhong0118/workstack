@@ -26,6 +26,8 @@
 
 登录有仓库读取权限的 GitHub 账号，在 [Release 附件](https://github.com/Zhong0118/workstack/releases/latest)中下载名称包含 `macOS` 的 ZIP。解压，将 `workstack.app` 拖入「应用程序」并从那里启动。首次使用时，在「系统设置 → 隐私与安全性 → 辅助功能」中允许 workstack 管理窗口。
 
+如果系统开关已打开，workstack 却仍提示未授权，先退出其他副本。在辅助功能列表中移除旧的 workstack 条目，再用「＋」选择 `/Applications/workstack.app` 并允许访问。返回应用后，在「新建窗口组」里查看「可选窗口」数量；「已选窗口」表示你本次勾选的数量。
+
 v0.2.1 使用临时签名（ad hoc），尚未经过 Apple 公证。如果系统提示无法验证开发者，请先确认下载来源，再按 [Apple 的首次打开说明](https://support.apple.com/zh-cn/102445)操作。
 
 ## 从源码构建
