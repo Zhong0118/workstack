@@ -4,7 +4,7 @@
 
 **按项目整理 Mac 上已经打开的窗口。** 把编辑器放在左侧，浏览器和终端叠成右侧的标签，保存成一个工作区。下次回到项目，单击侧栏就能恢复这套布局，继续在原来的应用里输入。
 
-[项目主页与交互演示](https://zhong0118.github.io/workstack/) · [从源码构建](#从源码构建) · [实机验证](Docs/Verification.md)
+[下载 Mac 应用](https://github.com/Zhong0118/workstack/releases/latest) · [项目主页与交互演示](https://zhong0118.github.io/workstack/) · [从源码构建](#从源码构建) · [实机验证](Docs/Verification.md)
 
 [![布局示意：编辑器置于左侧，右上方切换浏览器和终端，右下方保留访达](Docs/workspace-example.png)](https://zhong0118.github.io/workstack/)
 
@@ -22,9 +22,13 @@
 
 同一工作区可以包含多个组。组内支持跨应用标签、左右或上下分屏、三列、主窗加堆叠、网格和自由浮动。布局模板可以复用；复制工作区会复制结构，为新项目保留空位。
 
-## 从源码构建
+## 下载安装
 
-GitHub 上的 [v0.2.0](https://github.com/Zhong0118/workstack/releases/tag/v0.2.0) 提供源码。要在自己的 Mac 上试用，可用下方脚本生成本地签名的 `workstack.app`。
+登录有仓库读取权限的 GitHub 账号，在 [Release 附件](https://github.com/Zhong0118/workstack/releases/latest)中下载名称包含 `macOS` 的 ZIP。解压，将 `workstack.app` 拖入「应用程序」并从那里启动。首次使用时，在「系统设置 → 隐私与安全性 → 辅助功能」中允许 workstack 管理窗口。
+
+v0.2.1 使用临时签名（ad hoc），尚未经过 Apple 公证。如果系统提示无法验证开发者，请先确认下载来源，再按 [Apple 的首次打开说明](https://support.apple.com/zh-cn/102445)操作。
+
+## 从源码构建
 
 需要 Swift 6 和 macOS SDK。应用部署目标为 macOS 14 或更高版本；本机系统交互验证使用 Apple Silicon、macOS 27.0.1。仓库采用 Swift Package Manager，界面使用 SwiftUI 和 AppKit。
 
