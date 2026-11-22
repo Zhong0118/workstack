@@ -291,11 +291,25 @@ final class ProcessWindows: @unchecked Sendable {
         guard let position = AXValueCreate(.cgPoint, &point), let extent = AXValueCreate(.cgSize, &size) else {
             throw WindowAccessError.invalidFrame
         }
-        if move { try e.set(kAXPositionAttribute, position) }
-        if resize { try e.set(kAXSizeAttribute, extent) }
-        // The old size may have constrained the initial move against a screen edge.
-        if move, resize, let after = try e.frame(), abs(after.minX - target.minX) > 2 || abs(after.minY - target.minY) > 2 {
+        if move && resize {
+            // AppKit can acknowledge one component while the next setter still sees
+            // the pre-animation frame. Shrink before moving into a smaller area,
+            // and move before expanding so the old origin cannot constrain the size.
+            let shrinkFirst = size.width <= initial.width && size.height <= initial.height
+            if shrinkFirst { try e.set(kAXSizeAttribute, extent) } else { try e.set(kAXPositionAttribute, position) }
+            let firstFrame = try e.frame()
+            // AX reports the destination before the AppKit animation finishes.
+            // A second setter during that animation uses its intermediate geometry.
+            Thread.sleep(forTimeInterval: 0.25)
+            guard let firstFrame, try e.frame()?.roughlyEquals(firstFrame) == true else {
+                throw WindowAccessError.verification
+            }
+            _ = try writableWindow(id)
+            if shrinkFirst { try e.set(kAXPositionAttribute, position) } else { try e.set(kAXSizeAttribute, extent) }
+        } else if move {
             try e.set(kAXPositionAttribute, position)
+        } else {
+            try e.set(kAXSizeAttribute, extent)
         }
         try verify { try e.frame()?.roughlyEquals(target) == true }
     }

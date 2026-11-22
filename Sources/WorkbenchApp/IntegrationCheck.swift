@@ -412,6 +412,11 @@ import WorkbenchCore
             Set(fixtures().filter(\.minimized).map(\.id)) == [tabA, tabB, side]
                 && fixtures().contains { $0.id == spare && $0.focused } && visibleStrips().isEmpty
         }
+        let workspaceFrame = try await actual(spare).frame
+        guard let destination = model.activeWorkspace?.groups.first,
+            let expected = model.area(for: destination, among: [destination], document: model.state)
+        else { throw Failure("destination display unavailable") }
+        try require(workspaceFrame.roughlyEquals(expected), "restored window did not reach the destination frame")
         // Undo is invoked through the same entry point as the dashboard button.
         model.undo()
         try await settle()
