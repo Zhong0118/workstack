@@ -58,7 +58,7 @@ struct GroupComposer: View {
                 VStack(alignment: .leading, spacing: 8) {
                     TextField(d("Filter windows"), text: $filter).textFieldStyle(.roundedBorder)
                     if !model.trusted {
-                        Button(d("Open Accessibility settings")) { model.requestPermission() }
+                        WindowPermissionHelp()
                     }
                     List {
                         ForEach(visible) { w in
@@ -93,7 +93,13 @@ struct GroupComposer: View {
                     }.listStyle(.bordered)
                         .overlay {
                             if visible.isEmpty, stale.isEmpty {
-                                Text(d("No matching windows")).foregroundStyle(.secondary)
+                                Text(
+                                    d(
+                                        !model.trusted
+                                            ? "Window discovery requires Accessibility"
+                                            : filter.isEmpty ? "No eligible windows" : "No matching windows")
+                                )
+                                .foregroundStyle(.secondary).allowsHitTesting(false)
                             }
                         }
                 }
@@ -109,7 +115,10 @@ struct GroupComposer: View {
                         DeskPreview(group: preview).frame(height: 108)
                             .clipShape(RoundedRectangle(cornerRadius: 7))
                     }
-                    Text(deskCount(draft.selection.count, "window", "windows")).font(.headline)
+                    Text(d("Selected windows") + " · " + String(draft.selection.count)).font(.headline)
+                    if model.trusted {
+                        Text(d("Available windows") + " · " + String(visible.count)).font(.caption).foregroundStyle(.secondary)
+                    }
                     ScrollView {
                         VStack(alignment: .leading, spacing: 5) {
                             ForEach(Array(draft.selection.enumerated()), id: \.element) { index, id in

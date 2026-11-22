@@ -152,8 +152,7 @@ extension Dashboard {
             Image(systemName: "accessibility").font(.title2).foregroundStyle(Color.accentColor)
             VStack(alignment: .leading, spacing: 5) {
                 Text(d("Connect your Mac windows")).fontWeight(.semibold)
-                Text(d("Allow Accessibility access to find, move and switch windows.")).font(.callout).foregroundStyle(.secondary)
-                Button(d("Open Accessibility settings")) { model.requestPermission() }.controlSize(.small)
+                WindowPermissionHelp()
             }
             Spacer(minLength: 0)
         }.padding(13).frame(maxWidth: .infinity, alignment: .leading)
@@ -393,5 +392,19 @@ struct DeskPreview: View {
                 }
             }
         }.background(Color(nsColor: .windowBackgroundColor)).accessibilityHidden(true)
+    }
+}
+
+struct WindowPermissionHelp: View {
+    @Environment(Workbench.self) var model
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            if Bundle.main.bundleURL.pathComponents.contains("AppTranslocation") {
+                Text(d("Install workstack in Applications and reopen it before granting access."))
+            } else {
+                Text(d("Allow Accessibility access to find, move and switch windows."))
+            }
+            Button(d("Open Accessibility settings")) { model.requestPermission() }.controlSize(.small)
+        }.font(.callout)
     }
 }

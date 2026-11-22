@@ -82,6 +82,7 @@ final class Workbench {
         coordinator = WindowCoordinator(controller: controller ?? backend, journal: journal) {
             try LocalFile.write($0, to: journalPath)
         }
+        trusted = backend.trusted
         if !journal.entries.isEmpty { notice = tr("A previous session has windows to restore. Review Recovery in Settings.") }
     }
 
@@ -109,7 +110,13 @@ final class Workbench {
         displays = MacDisplay.all
         backend.refresh()
     }
-    func requestPermission() { backend.requestPermission(); refresh() }
+    func permissionMayHaveChanged() {
+        if trusted != backend.trusted { refresh() }
+    }
+    func requestPermission() {
+        if !backend.trusted { backend.requestPermission() }
+        refresh()
+    }
     func openSwitcher() {
         presentSwitcher?()
     }
@@ -124,6 +131,7 @@ final class Workbench {
     func update(_ snapshot: [LiveWindow], permission: Bool? = nil, screens: [DisplayArea]? = nil) {
         authorizeRecovery()
         let granted = permission ?? backend.trusted
+        let snapshot = granted ? snapshot : []
         if trusted != granted { trusted = granted }
         let nextDisplays = screens ?? MacDisplay.all
         let displayChanged = !displays.isEmpty && displays != nextDisplays

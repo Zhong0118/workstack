@@ -155,6 +155,9 @@ struct Dashboard: View {
         pane = nil
         search = ""
     }
+    func selectSidebarPage(_ dest: DeskPage) {
+        if case let .workspace(id) = dest { activateWorkspace(id) } else { navigate(dest) }
+    }
     func activateWorkspace(_ id: UUID) {
         guard !model.busy else { return }
         // Show the workspace at once. Arranging its windows can take a second, and a
@@ -246,7 +249,7 @@ struct Dashboard: View {
                 get: { page },
                 set: { dest in
                     guard let dest, dest != page else { return }
-                    if case let .workspace(id) = dest { activateWorkspace(id) } else { navigate(dest) }
+                    selectSidebarPage(dest)
                 })
         ) {
             Section {
@@ -274,9 +277,9 @@ struct Dashboard: View {
                 Divider()
                 HStack {
                     SettingsLink {
-                        Label(d("Settings"), systemImage: "gearshape")
+                        Label(d("Settings"), systemImage: "gearshape").frame(maxWidth: .infinity, alignment: .leading)
+                            .contentShape(Rectangle())
                     }.buttonStyle(.plain)
-                    Spacer()
                     Image(systemName: model.trusted ? "checkmark.shield" : "shield.slash")
                         .foregroundStyle(model.trusted ? Color.secondary : Color.orange)
                         .help(d(model.trusted ? "Accessibility enabled" : "Accessibility required"))
@@ -285,7 +288,7 @@ struct Dashboard: View {
         }
     }
     func sideItem(_ name: String, _ symbol: String, _ dest: DeskPage, active: Bool = false) -> some View {
-        HStack(spacing: 6) {
+        let label = HStack(spacing: 6) {
             Label(name, systemImage: symbol).lineLimit(1)
             Spacer(minLength: 1)
             if active {
@@ -294,12 +297,12 @@ struct Dashboard: View {
         }
         .padding(.vertical, small ? 0 : 2)
         .contentShape(Rectangle())
-        // Selecting a row only reports a change. Clicking the open workspace again re-applies it.
-        .simultaneousGesture(
-            TapGesture().onEnded {
-                if page == dest, case let .workspace(id) = dest { activateWorkspace(id) }
-            }
-        )
+        return Button {
+            selectSidebarPage(dest)
+        } label: {
+            label
+        }
+        .buttonStyle(.plain)
         .tag(dest)
         .accessibilityValue(active ? d("Active workspace") : "")
     }

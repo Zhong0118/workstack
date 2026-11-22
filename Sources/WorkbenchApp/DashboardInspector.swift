@@ -299,6 +299,7 @@ func deskWindowDetails(_ windows: [LiveWindow]) -> [UUID: String] {
 }
 
 struct DeskWindowList: View {
+    @Environment(Workbench.self) var model
     let windows: [LiveWindow]
     let select: (UUID) -> Void
     var selected: UUID?
@@ -329,8 +330,12 @@ struct DeskWindowList: View {
             }
             if list.isEmpty {
                 ContentUnavailableView(
-                    d("No matching windows"), systemImage: "macwindow",
-                    description: Text(d("Open an application window or adjust the filters.")))
+                    d(
+                        !model.trusted
+                            ? "Window discovery requires Accessibility"
+                            : (filter.isEmpty && app.isEmpty ? "No eligible windows" : "No matching windows")),
+                    systemImage: "macwindow",
+                    description: model.trusted ? Text(d("Open an application window or adjust the filters.")) : nil)
             }
             LazyVStack(alignment: .leading, spacing: 2) {
                 ForEach(list) { w in
@@ -397,7 +402,7 @@ struct DeskPicker: View {
                 }.help(d("Refresh"))
             }
             if !model.trusted {
-                Button(d("Open Accessibility settings")) { model.requestPermission() }
+                WindowPermissionHelp()
             }
             ScrollView {
                 DeskWindowList(windows: candidates, select: { selection = $0 }, selected: selection)

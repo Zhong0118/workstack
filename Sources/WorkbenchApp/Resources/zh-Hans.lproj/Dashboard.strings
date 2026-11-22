@@ -6,7 +6,7 @@
 "Add windows" = "添加窗口";
 "All applications" = "所有应用";
 "All windows" = "所有窗口";
-"Allow Accessibility access to find, move and switch windows." = "允许辅助功能访问后，即可查找、移动和切换窗口。";
+"Allow Accessibility access to find, move and switch windows." = "在「系统设置 → 隐私与安全性 → 辅助功能」中允许 workstack。若已有同名项目仍提示未授权，点「＋」选择当前安装的应用。";
 "Application" = "应用";
 "Application ID" = "应用标识";
 "Apply layout" = "应用布局";
@@ -163,3 +163,8 @@
 "Add to group" = "加入窗口组";
 "Enter workspace" = "进入工作区";
 "Create empty group" = "创建空窗口组";
+"Install workstack in Applications and reopen it before granting access." = "当前副本从系统临时目录运行。请在 Finder 中将下载的 workstack 拖到「应用程序」，退出当前副本，再从「应用程序」打开并检查辅助功能权限。";
+"Window discovery requires Accessibility" = "获得辅助功能授权后才能读取窗口列表";
+"No eligible windows" = "暂无符合条件的窗口";
+"Selected windows" = "已选窗口";
+"Available windows" = "可选窗口";

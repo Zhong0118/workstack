@@ -9,6 +9,7 @@ final class Lifecycle: NSObject, NSApplicationDelegate {
         NSApp.setActivationPolicy(.regular)
         if !IntegrationCheck.isQA { NSApp.activate(ignoringOtherApps: true) }
     }
+    func applicationDidBecomeActive(_ notification: Notification) { model?.permissionMayHaveChanged() }
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         guard let model else { return .terminateNow }
         Task {

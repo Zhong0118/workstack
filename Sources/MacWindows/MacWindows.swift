@@ -46,10 +46,18 @@ import WorkbenchCore
         } ?? true
     }
 
+    private var didRequestPermission = false
     public func requestPermission() {
+        guard !trusted else { return }
+        if didRequestPermission,
+            let pane = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"),
+            NSWorkspace.shared.open(pane)
+        {
+            return
+        }
+        didRequestPermission = true
         let options = ["AXTrustedCheckOptionPrompt": true] as CFDictionary
         _ = AXIsProcessTrustedWithOptions(options)
-        refresh()
     }
 
     public func start() {

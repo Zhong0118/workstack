@@ -67,6 +67,7 @@ struct WorkbenchSettings: View {
                             8
                         )
                         .background(page == item ? Color.accentColor.opacity(0.14) : .clear, in: RoundedRectangle(cornerRadius: 6))
+                        .contentShape(Rectangle())
                     }.buttonStyle(.plain)
                 }
                 Spacer()
@@ -194,7 +195,7 @@ struct WorkbenchSettings: View {
         case .rules: rules
         case .privacy:
             LabeledContent(tr("Accessibility"), value: tr(model.trusted ? "Granted" : "Permission required"))
-            Button(tr("Review Accessibility permission")) { model.requestPermission() }
+            if !model.trusted { WindowPermissionHelp() }
             Toggle(
                 tr("Enable on-demand window previews"),
                 isOn: Binding(
