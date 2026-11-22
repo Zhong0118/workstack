@@ -26,32 +26,36 @@ extension Dashboard {
     func workspaceCard(_ w: Workspace) -> some View {
         let active = model.state.activeID == w.id
         return VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: 7) {
+                if grid {
+                    if w.groups.isEmpty {
+                        Image(systemName: "rectangle.stack").font(.title).foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity).frame(height: small ? 60 : 85)
+                    } else {
+                        HStack(spacing: 2) { ForEach(Array(w.groups.prefix(3))) { g in DeskPreview(group: g) } }
+                            .frame(height: small ? 60 : 85)
+                    }
+                }
+                HStack {
+                    Text(w.name).font(.headline).lineLimit(1)
+                    Spacer()
+                    if active {
+                        Image(systemName: "checkmark.circle.fill").foregroundStyle(Color.accentColor).help(
+                            d("Active workspace"))
+                    }
+                }
+                Text(workspaceDetail(w)).font(.caption).foregroundStyle(.secondary)
+            }.frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
+                .gesture(
+                    TapGesture(count: 2).onEnded { openSpaceEditor(w) }
+                        .exclusively(before: TapGesture().onEnded { activateWorkspace(w.id) })
+                )
             Button {
                 activateWorkspace(w.id)
             } label: {
-                VStack(alignment: .leading, spacing: 7) {
-                    if grid {
-                        if w.groups.isEmpty {
-                            Image(systemName: "rectangle.stack").font(.title).foregroundStyle(.secondary)
-                                .frame(maxWidth: .infinity).frame(height: small ? 60 : 85)
-                        } else {
-                            HStack(spacing: 2) { ForEach(Array(w.groups.prefix(3))) { g in DeskPreview(group: g) } }
-                                .frame(height: small ? 60 : 85)
-                        }
-                    }
-                    HStack {
-                        Text(w.name).font(.headline).lineLimit(1)
-                        Spacer()
-                        if active {
-                            Image(systemName: "checkmark.circle.fill").foregroundStyle(Color.accentColor).help(
-                                d("Active workspace"))
-                        }
-                    }
-                    Text(workspaceDetail(w)).font(.caption).foregroundStyle(.secondary)
-                    Label(d("Enter workspace"), systemImage: "arrow.right.circle").font(.callout.weight(.medium)).foregroundStyle(
-                        Color.accentColor)
-                }.frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
-            }.buttonStyle(.plain).disabledWhileBusy()
+                Label(d("Enter workspace"), systemImage: "arrow.right.circle").font(.callout.weight(.medium))
+                    .foregroundStyle(Color.accentColor)
+            }.buttonStyle(.plain).disabledWhileBusy().padding(.top, 7)
                 .accessibilityHint(d("Activate workspace"))
                 .accessibilityValue(active ? d("Active workspace") : "")
             HStack {
