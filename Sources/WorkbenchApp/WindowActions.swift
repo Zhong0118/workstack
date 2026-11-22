@@ -38,7 +38,7 @@ extension Workbench {
         if let error = error as? ControlError {
             switch error {
             case .unavailable: return "窗口已关闭或状态发生变化，操作未完成。请刷新并检查窗口连接。"
-            case .unexpectedFrame: return "应用未接受请求的位置或尺寸，已尝试撤回本次布局。"
+            case .unexpectedFrame: return tr("Window frame was not accepted.")
             case .recoveryRequired: return "窗口身份与恢复记录不一致，请在检查器中核对连接。"
             }
         }

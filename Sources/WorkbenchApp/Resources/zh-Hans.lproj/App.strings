@@ -96,3 +96,4 @@
 "Restore the workspace layout and focus its window." = "恢复目标工作区的布局并聚焦窗口。";
 "Restore the layout and minimize recoverable windows in the previous workspace." = "恢复目标布局，并将上一工作区中可安全恢复的窗口最小化。";
 "Wait for the current operation to finish." = "请等待当前操作完成。";
+"Window frame was not accepted." = "窗口未达到请求的位置或尺寸，已尝试撤回本次操作。若窗格太小，可拖动分隔线为窗口留出空间，再应用布局。";

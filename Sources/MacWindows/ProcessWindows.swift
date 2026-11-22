@@ -311,7 +311,11 @@ final class ProcessWindows: @unchecked Sendable {
         } else {
             try e.set(kAXSizeAttribute, extent)
         }
-        try verify { try e.frame()?.roughlyEquals(target) == true }
+        do {
+            try verify { try e.frame()?.roughlyEquals(target) == true }
+        } catch WindowAccessError.verification {
+            throw ControlError.unexpectedFrame
+        }
     }
 
     func orderFront(_ id: UUID) throws {
